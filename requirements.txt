@@ -1,0 +1,22 @@
+# Google AI & Model Integration / Routing
+google-genai>=0.1.0
+google-adk>=1.0.0
+litellm>=1.50.0
+
+# Schemas, Data & Environment
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+
+# Web Search & Data Retrieval Tools
+duckduckgo-search>=6.0.0
+tavily-python>=0.7.0
+
+# AST Verification & Code Formatting
+black>=24.0.0
+
+# Backend Web Server & APIs
+fastapi>=0.110.0
+uvicorn>=0.28.0
+
+# Tracing & Telemetry
+opentelemetry-sdk>=1.20.0
