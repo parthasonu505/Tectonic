@@ -119,3 +119,29 @@ export interface AgentEnvConfig {
   agentEnvExists: boolean;
   envPath: string;
 }
+
+// Streaming Types
+export interface StreamingChunk {
+  type: 'text' | 'thinking' | 'tool_call' | 'tool_result' | 'file_write' | 'agent_switch' | 'complete';
+  content?: string;
+  agent?: string;
+  tool?: string;
+  filePath?: string;
+  fileContent?: string;
+  timestamp?: number;
+}
+
+export interface FileWriteEvent {
+  path: string;
+  content: string;
+  status: 'writing' | 'complete';
+  linesWritten: number;
+  totalLines: number;
+}
+
+export interface AgentEvent {
+  agent: string;
+  action: string;
+  status: 'started' | 'thinking' | 'executing' | 'complete';
+  timestamp: number;
+}

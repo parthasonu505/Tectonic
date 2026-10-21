@@ -4,7 +4,6 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from google.adk.models.lite_llm import LiteLlm
 
 # Suppress ADK advisory notice for LiteLLM
 os.environ["ADK_SUPPRESS_GEMINI_LITELLM_WARNINGS"] = "true"
@@ -16,6 +15,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 load_dotenv()
 
 # --- Model & Environment --------------------------------------------------
+# Support Google Agent Builder Platform API Key (AQ.* format) and standard Gemini API keys
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
 if GOOGLE_API_KEY:
     os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY
@@ -27,11 +27,24 @@ import litellm
 litellm.num_retries = 5
 litellm.request_timeout = 90
 
+# Default model - use gemini-3.8-flash (latest available model)
 RAW_MODEL_NAME = os.getenv("GEMINI_MODEL", os.getenv("MODEL_NAME", "gemini-3.8-flash"))
 
 
 def resolve_model_name(raw_name: str) -> str:
     """Normalize model string to provider format for LiteLLM generalization."""
+    if not raw_name:
+        return "gemini-3.8-flash"
+    clean = raw_name.strip()
+    # For native Gemini model, don't add gemini/ prefix
+    if "/" in clean:
+        # Extract just the model name for native Gemini
+        return clean.split("/")[-1]
+    return clean
+
+
+def resolve_litellm_model_name(raw_name: str) -> str:
+    """Normalize model string to provider format for LiteLLM."""
     if not raw_name:
         return "gemini/gemini-3.8-flash"
     clean = raw_name.strip()
@@ -46,16 +59,39 @@ MODEL_NAME = resolve_model_name(RAW_MODEL_NAME)
 MODEL_ID = MODEL_NAME
 
 
-def build_model(model_name: str = None) -> LiteLlm:
-    """Create generalized LiteLlm model wrapper used by every agent."""
+def _is_aq_key(api_key: str) -> bool:
+    """Check if the API key is an AQ. (Authentication Key) format from Google AI Studio."""
+    return api_key and api_key.startswith("AQ.")
+
+
+def build_model(model_name: str = None):
+    """Create model wrapper used by every agent.
+    
+    Uses native Google Gemini model for AQ.* keys (Authentication Keys from Google AI Studio)
+    which work better with the native SDK. Falls back to LiteLLM for other key formats.
+    """
+    api_key = os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     target_model = resolve_model_name(model_name or MODEL_NAME)
+    
+    # For AQ. keys (new Google AI Studio Authentication Keys), use native Gemini model
+    # These keys work best with the native google-genai SDK, not LiteLLM's OpenAI-compatible route
+    if _is_aq_key(api_key):
+        from google.adk.models.google_llm import Gemini
+        return Gemini(model=target_model)
+    
+    # For standard API keys (AIza*), use LiteLLM wrapper
+    from google.adk.models.lite_llm import LiteLlm
+    litellm_model = resolve_litellm_model_name(model_name or RAW_MODEL_NAME)
+    
     kwargs = {
-        "model": target_model,
+        "model": litellm_model,
         "num_retries": 5,
     }
-    api_key = os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
-    if api_key and "gemini" in target_model:
+    
+    # Pass API key for Gemini models
+    if api_key and "gemini" in litellm_model.lower():
         kwargs["api_key"] = api_key
+    
     return LiteLlm(**kwargs)
 
 

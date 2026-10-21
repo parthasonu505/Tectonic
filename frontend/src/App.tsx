@@ -16,13 +16,16 @@ import {
   Layers,
   AlertCircle,
   Save,
-  Check
+  Check,
+  Sun,
+  Moon
 } from 'lucide-react';
 import { useAgentStudioStore } from './store/useAgentStudioStore';
 import { ArchitectChat } from './components/chat/ArchitectChat';
 import { AgentVisualizer3D } from './components/visualizer/AgentVisualizer3D';
 import { LiveAgentRunner } from './components/sandbox/LiveAgentRunner';
 import { CodeInspector } from './components/inspector/CodeInspector';
+import { AgentActivitySidebar } from './components/AgentActivitySidebar';
 
 export const App: React.FC = () => {
   const { 
@@ -41,7 +44,8 @@ export const App: React.FC = () => {
     setSelectedAgent,
     refreshCreatedAgents,
     startNewBuilderSession,
-    startNewSandboxSession
+    startNewSandboxSession,
+    isChatLoading
   } = useAgentStudioStore();
 
   const [apiKeyInput, setApiKeyInput] = useState('');
@@ -49,6 +53,25 @@ export const App: React.FC = () => {
   const [saveSuccessMsg, setSaveSuccessMsg] = useState(false);
   const [isSavingEnv, setIsSavingEnv] = useState(false);
   const [agentDropdownOpen, setAgentDropdownOpen] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(() => {
+    // Check localStorage or default to dark
+    const saved = localStorage.getItem('theme');
+    return saved ? saved === 'dark' : true;
+  });
+
+  // Apply theme to document
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.remove('light');
+    } else {
+      document.documentElement.classList.add('light');
+    }
+    localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
+
+  const toggleTheme = () => {
+    setIsDarkMode(prev => !prev);
+  };
 
   // Initialize on mount
   useEffect(() => {
@@ -89,7 +112,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-studio-bg text-slate-100 overflow-hidden font-sans">
+    <div className={`flex flex-col h-screen w-screen overflow-hidden font-sans transition-colors duration-300 ${isDarkMode ? 'bg-studio-bg text-slate-100' : 'bg-studio-bg text-slate-800'}`}>
       {/* Top Navbar */}
       <header className="h-12 border-b border-studio-border bg-studio-surface/80 backdrop-blur-xl px-4 flex items-center justify-between z-30 shrink-0">
         <div className="flex items-center gap-4">
@@ -223,6 +246,23 @@ export const App: React.FC = () => {
             <span>Agent Builder: Active</span>
           </div>
 
+          {/* Theme Toggle Button */}
+          <button
+            onClick={toggleTheme}
+            className={`p-1.5 rounded-lg border transition-all duration-300 ${
+              isDarkMode 
+                ? 'bg-white/5 hover:bg-white/10 text-amber-400 hover:text-amber-300 border-white/10' 
+                : 'bg-amber-50 hover:bg-amber-100 text-amber-600 hover:text-amber-700 border-amber-200'
+            }`}
+            title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+          >
+            {isDarkMode ? (
+              <Sun className="w-4 h-4" />
+            ) : (
+              <Moon className="w-4 h-4" />
+            )}
+          </button>
+
           <button
             onClick={() => setShowEnvModal(true)}
             className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white border border-white/10 transition-colors"
@@ -233,19 +273,22 @@ export const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Studio Workspace (3-Pane Layout) */}
+      {/* Main Studio Workspace (Multi-Pane Layout) */}
       <main className="flex-1 flex overflow-hidden">
-        {/* Left Pane (40% width): Smart Interactive Architect Chat */}
-        <div className="w-[40%] min-w-[340px] max-w-[560px] h-full flex flex-col shrink-0">
+        {/* Left Pane: Smart Interactive Architect Chat */}
+        <div className="w-[38%] min-w-[340px] max-w-[520px] h-full flex flex-col shrink-0">
           <ArchitectChat />
         </div>
 
-        {/* Right Pane (60% width): Dual-Mode Viewport */}
+        {/* Center Pane: Dual-Mode Viewport */}
         <div className="flex-1 h-full relative overflow-hidden bg-studio-bg">
           {activeTab === 'visualizer' && <AgentVisualizer3D />}
           {activeTab === 'sandbox' && <LiveAgentRunner />}
           {activeTab === 'inspector' && <CodeInspector />}
         </div>
+
+        {/* Right Pane: Agent Activity Sidebar */}
+        <AgentActivitySidebar isProcessing={isChatLoading} />
       </main>
 
       {/* Google Gemini API Key & Environment Config Modal (Zero LLM Interaction) */}

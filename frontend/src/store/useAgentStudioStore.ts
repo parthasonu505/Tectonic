@@ -7,7 +7,9 @@ import type {
   SandboxChatMessage,
   CreatedAgent,
   EnvConfig,
-  AgentEnvConfig
+  AgentEnvConfig,
+  FileWriteEvent,
+  AgentEvent
 } from '../types/agent';
 import { api, DEFAULT_MOCK_SPEC, DEFAULT_DECISION_GROUP } from '../services/api';
 
@@ -91,6 +93,20 @@ interface AgentStudioState {
   sendSandboxMessage: (content: string) => Promise<void>;
   resetSandbox: () => void;
   resetDemoToInitial: () => void;
+
+  // Streaming & File Writing State
+  isStreaming: boolean;
+  streamingText: string;
+  currentAgentPhase: string;
+  fileWriteEvents: FileWriteEvent[];
+  agentEvents: AgentEvent[];
+  pendingFiles: { path: string; content: string }[];
+  setStreamingState: (isStreaming: boolean, text?: string) => void;
+  setCurrentAgentPhase: (phase: string) => void;
+  addFileWriteEvent: (event: FileWriteEvent) => void;
+  addAgentEvent: (event: AgentEvent) => void;
+  setPendingFiles: (files: { path: string; content: string }[]) => void;
+  clearStreamingState: () => void;
 }
 
 export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
@@ -258,7 +274,9 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
 
     set((state) => ({
       chatMessages: [...state.chatMessages, userMsg],
-      isChatLoading: true
+      isChatLoading: true,
+      isStreaming: true,
+      currentAgentPhase: 'orchestrator'
     }));
 
     try {
@@ -275,6 +293,7 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
       set((state) => ({
         chatMessages: [...state.chatMessages, assistantMsg],
         isChatLoading: false,
+        isStreaming: false,
         currentDecisionGroup: resp.decisionGroup || state.currentDecisionGroup,
         spec: resp.extractedSpec ? { ...state.spec, ...resp.extractedSpec } : state.spec
       }));
@@ -288,7 +307,8 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
       };
       set((state) => ({
         chatMessages: [...state.chatMessages, errMsg],
-        isChatLoading: false
+        isChatLoading: false,
+        isStreaming: false
       }));
     }
   },
@@ -404,7 +424,7 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
     const { currentDecisionGroup, spec, builderSessionId } = get();
     if (!currentDecisionGroup) return;
 
-    set({ isGeneratingAgent: true });
+    set({ isGeneratingAgent: true, isStreaming: true, currentAgentPhase: 'orchestrator' });
 
     let sid = builderSessionId;
     if (!sid) {
@@ -430,6 +450,18 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
         spec
       });
 
+      // Convert generated files to pending files for streaming display
+      const pendingFilesArray = Object.entries(resp.files || {}).map(([path, content]) => ({
+        path,
+        content: typeof content === 'string' ? content : String(content)
+      }));
+      set({ pendingFiles: pendingFilesArray, currentAgentPhase: 'codegen' });
+
+      // Wait for file streaming animation to complete (simulate real-time writing)
+      const totalChars = pendingFilesArray.reduce((sum, f) => sum + f.content.length, 0);
+      const streamingTime = Math.min(Math.max(totalChars * 0.015, 3000), 15000);
+      await new Promise(r => setTimeout(r, streamingTime));
+
       // Mark current decision card as locked/submitted
       const updatedMessages = get().chatMessages.map((m) => {
         if (m.decisionGroup && m.decisionGroup.id === currentDecisionGroup.id) {
@@ -444,7 +476,7 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
       const confirmMsg: ChatMessage = {
         id: `msg-confirmed-${Date.now()}`,
         sender: 'assistant',
-        content: `🎉 **Agent Build Complete!**\n${resp.message}\n\nSwitched to **Live Sandbox** tab to run your new agent!`,
+        content: `🎉 **Agent Build Complete!**\n${resp.message}\n\n✅ Generated ${pendingFilesArray.length} files\n\nSwitched to **Live Sandbox** tab to run your new agent!`,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
 
@@ -455,11 +487,13 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
         isGeneratingAgent: false,
         isAgentReady: true,
         generatedFiles: resp.files,
-        activeTab: 'sandbox'
+        activeTab: 'sandbox',
+        isStreaming: false,
+        pendingFiles: []
       });
     } catch (err: any) {
       console.error(err);
-      set({ isGeneratingAgent: false });
+      set({ isGeneratingAgent: false, isStreaming: false, pendingFiles: [] });
     }
   },
 
@@ -594,5 +628,27 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
 
   resetDemoToInitial: () => {
     get().startNewBuilderSession();
-  }
+  },
+
+  // Streaming & File Writing State
+  isStreaming: false,
+  streamingText: '',
+  currentAgentPhase: 'orchestrator',
+  fileWriteEvents: [],
+  agentEvents: [],
+  pendingFiles: [],
+
+  setStreamingState: (isStreaming, text) => set({ isStreaming, streamingText: text || '' }),
+  setCurrentAgentPhase: (phase) => set({ currentAgentPhase: phase }),
+  addFileWriteEvent: (event) => set(s => ({ fileWriteEvents: [...s.fileWriteEvents, event] })),
+  addAgentEvent: (event) => set(s => ({ agentEvents: [...s.agentEvents, event] })),
+  setPendingFiles: (files) => set({ pendingFiles: files }),
+  clearStreamingState: () => set({
+    isStreaming: false,
+    streamingText: '',
+    currentAgentPhase: 'orchestrator',
+    fileWriteEvents: [],
+    agentEvents: [],
+    pendingFiles: []
+  })
 }));

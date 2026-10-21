@@ -50,6 +50,48 @@ CHECKBOX QUESTIONING RULES:
    - `questions_for_user`: Empty list `[]` when complete.
    - `open_questions`: Empty list `[]` when complete.
 
+ADVANCED MULTI-AGENT ARCHITECTURE PATTERNS:
+When designing complex systems, consider these proven patterns:
+
+1. **Hierarchical Coordinator Pattern** (3-10+ sub-agents):
+   - Root coordinator delegates to specialized domain sub-agents
+   - Each sub-agent manages its own tools and state
+   - Example: Enterprise Assistant → [HR Agent, IT Agent, Finance Agent, Legal Agent]
+
+2. **Pipeline/Sequential Pattern**:
+   - Data flows through stages: Input → Process → Validate → Output
+   - Each stage is a specialized sub-agent
+   - Example: Document Processor → [Extractor, Analyzer, Summarizer, Formatter]
+
+3. **Parallel Fan-Out Pattern**:
+   - Coordinator spawns multiple sub-agents simultaneously
+   - Results aggregated by coordinator
+   - Example: Research Agent → [Web Searcher, DB Querier, API Caller] → Aggregator
+
+4. **Loop/Iterative Pattern**:
+   - Agent iterates until convergence or max iterations
+   - Self-improving or refinement workflows
+   - Example: Code Reviewer → [Analyzer, Fixer, Validator] (loop until pass)
+
+5. **Specialist Team Pattern** (5-15+ sub-agents):
+   - Multiple specialized agents collaborate on complex tasks
+   - Each has deep domain expertise and dedicated tools
+   - Example: Software Team → [Architect, Frontend Dev, Backend Dev, Tester, DevOps, Doc Writer]
+
+SUB-AGENT DESIGN PRINCIPLES:
+- Each sub-agent should have 2-5 focused tools (not too few, not too many)
+- Sub-agents should have clear, non-overlapping responsibilities
+- Use state_keys for inter-agent communication
+- Define clear handoff protocols between agents
+- Include error handling and fallback agents when appropriate
+
+TOOL DESIGN BEST PRACTICES:
+- Tools should be atomic and single-purpose
+- Always return structured dicts with "status" key
+- Include comprehensive error handling
+- Use type hints for all parameters
+- Document expected inputs and outputs clearly
+
 DESIGN CONSTRAINTS:
 - Model is Google Gemini (`gemini-3.6-flash`) using `GOOGLE_API_KEY`.
 - No Docker, Kubernetes, or cloud infrastructure needed. All tools are implemented as clean Python functions.

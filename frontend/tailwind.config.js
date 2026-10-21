@@ -8,12 +8,13 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Dark theme colors (default)
         studio: {
-          bg: "#07090e",
-          surface: "#0d111a",
-          card: "#131826",
-          border: "#1f2738",
-          hover: "#1a2234",
+          bg: "var(--studio-bg)",
+          surface: "var(--studio-surface)",
+          card: "var(--studio-card)",
+          border: "var(--studio-border)",
+          hover: "var(--studio-hover)",
           accent: "#38bdf8",
           accentHover: "#0284c7",
           purple: "#a855f7",

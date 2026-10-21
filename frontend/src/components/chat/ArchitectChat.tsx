@@ -11,11 +11,16 @@ import {
   RefreshCw, 
   Plus,
   Sparkles,
-  Key
+  Key,
+  Cpu,
+  Zap,
+  Brain
 } from 'lucide-react';
 import { useAgentStudioStore } from '../../store/useAgentStudioStore';
 import { DecisionCardGroup } from './DecisionCardGroup';
 import { MarkdownContent } from './MarkdownContent';
+import { StreamingAgentDisplay } from './StreamingAgentDisplay';
+import { StreamingCodePanel } from '../StreamingCodePanel';
 
 export const ArchitectChat: React.FC = () => {
   const { 
@@ -28,7 +33,10 @@ export const ArchitectChat: React.FC = () => {
     startNewBuilderSession,
     builderSessionId,
     envConfig,
-    setShowEnvModal
+    setShowEnvModal,
+    isGeneratingAgent,
+    pendingFiles,
+    setCurrentAgentPhase
   } = useAgentStudioStore();
 
   const [inputVal, setInputVal] = useState('');
@@ -207,17 +215,20 @@ export const ArchitectChat: React.FC = () => {
           );
         })}
 
-        {isChatLoading && (
-          <div className="flex gap-3 items-center">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center shadow-md shadow-sky-500/20 shrink-0 animate-pulse">
-              <Bot className="w-4 h-4 text-white" />
-            </div>
-            <div className="p-3 rounded-2xl bg-studio-card/90 border border-white/5 text-xs text-slate-400 flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-sky-400 animate-bounce" />
-              <div className="w-2 h-2 rounded-full bg-sky-400 animate-bounce [animation-delay:0.2s]" />
-              <div className="w-2 h-2 rounded-full bg-sky-400 animate-bounce [animation-delay:0.4s]" />
-              <span>Analyzing requirements & building agent with Google Gemini (gemini-3.6-flash)...</span>
-            </div>
+        {/* AI Agent Processing Display */}
+        {(isChatLoading || isGeneratingAgent) && (
+          <div className="space-y-3 animate-in fade-in duration-300">
+            <StreamingAgentDisplay 
+              isActive={isChatLoading || isGeneratingAgent} 
+              onPhaseChange={setCurrentAgentPhase}
+            />
+            {isGeneratingAgent && pendingFiles.length > 0 && (
+              <StreamingCodePanel
+                isActive={true}
+                files={pendingFiles}
+                currentAgent="code_generator"
+              />
+            )}
           </div>
         )}
       </div>

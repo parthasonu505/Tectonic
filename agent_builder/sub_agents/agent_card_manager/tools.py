@@ -227,7 +227,8 @@ def validate_agent_registry(project_name: str, tool_context: ToolContext) -> dic
     if len(roots) != 1:
         issues.append(f"Expected exactly one root agent, found {len(roots)}.")
     for name, card in cards.items():
-        if not model_name:
+        card_model = card.get("model", "")
+        if not card_model:
             issues.append(f"'{name}' must specify a valid model.")
         if card.get("agent_type") == "llm" and not card.get("instruction", "").strip():
             issues.append(f"'{name}' is an llm agent without an instruction.")
