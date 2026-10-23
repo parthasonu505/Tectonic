@@ -38,6 +38,7 @@ export const MODULE_NODE_WIDTH = 212;
 export const MODULE_NODE_HEIGHT = 92;
 const MODULE_GAP = 28;
 const MODULE_LANE_OFFSET = 150;
+const MODULES_PER_ROW = 5;
 
 /**
  * Shared modules sit in their own "service floor" lane, centred under the agent tree. Kept out of
@@ -48,8 +49,14 @@ export function layoutModuleLane(moduleNodeIds: string[], agentPositions: Record
   const minX = pts.length ? Math.min(...pts.map((p) => p.x)) : 0;
   const maxX = pts.length ? Math.max(...pts.map((p) => p.x + NODE_WIDTH)) : 0;
   const bottom = pts.length ? Math.max(...pts.map((p) => p.y + NODE_HEIGHT)) : 0;
-  const laneWidth = moduleNodeIds.length * MODULE_NODE_WIDTH + Math.max(0, moduleNodeIds.length - 1) * MODULE_GAP;
+  // Wrap into rows of MODULES_PER_ROW so a growing module catalogue never flattens the agent tree.
+  const perRow = Math.min(MODULES_PER_ROW, Math.max(1, moduleNodeIds.length));
+  const laneWidth = perRow * MODULE_NODE_WIDTH + (perRow - 1) * MODULE_GAP;
   const startX = (minX + maxX) / 2 - laneWidth / 2;
-  const y = bottom + MODULE_LANE_OFFSET;
-  return Object.fromEntries(moduleNodeIds.map((id, i) => [id, { x: startX + i * (MODULE_NODE_WIDTH + MODULE_GAP), y }]));
+  const y0 = bottom + MODULE_LANE_OFFSET;
+  return Object.fromEntries(moduleNodeIds.map((id, i) => {
+    const row = Math.floor(i / perRow);
+    const col = i % perRow;
+    return [id, { x: startX + col * (MODULE_NODE_WIDTH + MODULE_GAP), y: y0 + row * (MODULE_NODE_HEIGHT + MODULE_GAP) }];
+  }));
 }

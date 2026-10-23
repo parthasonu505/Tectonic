@@ -71,7 +71,7 @@ class GuardrailsModule(BaseModule):
         redacted, found = pii_detector.detect_and_redact(text, entity_types or DEFAULT_PII_TYPES)
         return {"text": redacted, "entities": found}
 
-    @operation("Replace the tenant's active policy profile (denied topics, enabled checks, PII types).")
+    @operation("Replace the tenant's active policy profile (denied topics, enabled checks, PII types).", permission="admin")
     async def configure_profile(
         self, ctx: CallContext, denied_topics: list[str] | None = None, enabled_checks: list[str] | None = None,
         pii_entity_types: list[str] | None = None, groundedness_threshold: float = 0.85,

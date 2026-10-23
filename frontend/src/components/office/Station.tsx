@@ -135,6 +135,103 @@ function Fixture({ id, palette, accent, color, spin }: { id: string; palette: Of
           </group>
         </group>
       );
+    case 'agentic_rag': // library bookshelf with glowing volumes being pulled
+      return (
+        <group>
+          <mesh position={[0, 1.0, -0.15]} castShadow>
+            <boxGeometry args={[2.2, 2.0, 0.45]} />
+            <meshStandardMaterial color={palette.deskLeg} roughness={0.6} />
+          </mesh>
+          {[0.45, 1.0, 1.55].map((y) => (
+            <group key={y} position={[0, y, 0.1]}>
+              {[-0.8, -0.5, -0.25, 0.05, 0.35, 0.65].map((x, i) => (
+                <mesh key={x} position={[x, 0.17, 0]}>
+                  <boxGeometry args={[0.18, 0.34 - (i % 3) * 0.04, 0.05]} />
+                  {i === 2 && y === 1.0 ? <AccentMaterial accentRef={accent} color={color} /> : <meshBasicMaterial color={color} transparent opacity={0.18 + (i % 3) * 0.08} toneMapped={false} />}
+                </mesh>
+              ))}
+            </group>
+          ))}
+        </group>
+      );
+    case 'vector_db': // server rack with LED rows
+      return (
+        <group>
+          {[-0.55, 0.55].map((x) => (
+            <group key={x} position={[x, 0, 0]}>
+              <mesh position={[0, 1.0, 0]} castShadow>
+                <boxGeometry args={[0.9, 2.0, 0.8]} />
+                <meshStandardMaterial color="#0E1015" metalness={0.5} roughness={0.35} />
+              </mesh>
+              {[0.35, 0.6, 0.85, 1.1, 1.35, 1.6].map((y, i) => (
+                <mesh key={y} position={[0, y, 0.41]}>
+                  <planeGeometry args={[0.7, 0.05]} />
+                  {i === 2 && x < 0 ? <AccentMaterial accentRef={accent} color={color} /> : <meshBasicMaterial color={color} transparent opacity={0.25 + (i % 2) * 0.2} toneMapped={false} />}
+                </mesh>
+              ))}
+            </group>
+          ))}
+        </group>
+      );
+    case 'finops': // ledger desk with coin stacks
+      return (
+        <group>
+          <mesh position={[0, 0.5, 0]} castShadow receiveShadow>
+            <boxGeometry args={[2.0, 1.0, 0.8]} />
+            <meshStandardMaterial color={palette.deskTop} roughness={0.5} />
+          </mesh>
+          {[[-0.6, 3], [-0.25, 5], [0.1, 2], [0.5, 4]].map(([x, n]) => (
+            <group key={x} position={[x, 1.0, 0]}>
+              {Array.from({ length: n }, (_, k) => (
+                <mesh key={k} position={[0, 0.03 + k * 0.06, 0]}>
+                  <cylinderGeometry args={[0.12, 0.12, 0.05, 20]} />
+                  {k === n - 1 && x === -0.25 ? <AccentMaterial accentRef={accent} color={color} /> : <meshStandardMaterial color="#C9A227" metalness={0.7} roughness={0.3} />}
+                </mesh>
+              ))}
+            </group>
+          ))}
+        </group>
+      );
+    case 'promptops': // podium with a teleprompter screen
+      return (
+        <group>
+          <mesh position={[0, 0.55, 0]} castShadow>
+            <cylinderGeometry args={[0.35, 0.45, 1.1, 6]} />
+            <meshStandardMaterial color={palette.deskLeg} />
+          </mesh>
+          <mesh position={[0, 1.55, -0.05]} rotation={[-0.25, 0, 0]}>
+            <boxGeometry args={[1.5, 0.85, 0.04]} />
+            <meshStandardMaterial color="#07080B" />
+          </mesh>
+          <mesh position={[0, 1.55, -0.02]} rotation={[-0.25, 0, 0]}>
+            <planeGeometry args={[1.38, 0.74]} />
+            <AccentMaterial accentRef={accent} color={color} />
+          </mesh>
+        </group>
+      );
+    case 'auditability': // filing cabinet + hash-chain sculpture
+      return (
+        <group>
+          <mesh position={[-0.45, 0.8, 0]} castShadow>
+            <boxGeometry args={[0.9, 1.6, 0.8]} />
+            <meshStandardMaterial color={palette.deskLeg} metalness={0.3} roughness={0.5} />
+          </mesh>
+          {[0.35, 0.8, 1.25].map((y) => (
+            <mesh key={y} position={[-0.45, y, 0.41]}>
+              <boxGeometry args={[0.7, 0.32, 0.02]} />
+              <meshStandardMaterial color={palette.deskTop} />
+            </mesh>
+          ))}
+          <group ref={spin} position={[0.6, 1.1, 0]}>
+            {[0, 1, 2].map((k) => (
+              <mesh key={k} position={[0, (k - 1) * 0.32, 0]} rotation={[0, k % 2 ? Math.PI / 2 : 0, 0]}>
+                <torusGeometry args={[0.16, 0.035, 10, 24]} />
+                {k === 1 ? <AccentMaterial accentRef={accent} color={color} /> : <meshBasicMaterial color={color} transparent opacity={0.5} toneMapped={false} />}
+              </mesh>
+            ))}
+          </group>
+        </group>
+      );
     default:
       return (
         <mesh position={[0, 0.8, 0]} castShadow>

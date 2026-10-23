@@ -12,13 +12,14 @@ import os
 from pathlib import Path
 
 import uvicorn
+from fastapi import Body, HTTPException
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.cli.utils._nested_agent_loader import NestedAgentLoader
 
 from agent_builder.telemetry import hub
 from agent_builder.telemetry import router as telemetry_router
 from tectonic_runtime import bus as module_bus
-from tectonic_runtime import get_runtime
+from tectonic_runtime import CallContext, get_runtime
 from tectonic_runtime.simulation import is_running, run_office_simulation
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -47,6 +48,29 @@ def _forward_module_event(event: dict) -> None:
 module_bus.subscribe(_forward_module_event)
 runtime = get_runtime()  # registers every module (state "offline" until first use)
 _background: set[asyncio.Task] = set()
+
+# Audit trail: agent telemetry comes from the hub (module events reach it directly off the bus).
+_audit = runtime.module("auditability")
+hub.add_listener(lambda event: None if event.get("type", "").startswith("MODULE_") else _audit.observe(event))  # type: ignore[attr-defined]
+
+# The Command Center UI acts as the platform operator: admin-equivalent, separately attributed.
+OPERATOR = CallContext(agent_id="operator", role="operator", session_id="command-center")
+
+
+@app.post("/modules/{module}/{operation}")
+async def invoke_module(module: str, operation: str, payload: dict = Body(default_factory=dict)) -> dict:
+    if module not in runtime.modules:
+        raise HTTPException(404, f"unknown module {module!r}")
+    result = await runtime.invoke(module, operation, payload, OPERATOR)
+    return result.to_dict()
+
+
+@app.on_event("shutdown")
+async def _flush_state() -> None:
+    await _audit.flush()  # type: ignore[attr-defined]
+    finops = runtime.module("finops")
+    if getattr(finops, "repository", None) is not None:
+        finops.repository.flush()  # type: ignore[attr-defined]
 
 
 @app.get("/modules")

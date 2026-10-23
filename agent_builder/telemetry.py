@@ -16,6 +16,12 @@ Event contract (every event also carries ``type``, ``seq`` and ``timestamp`` in 
     MODULE_*            shared core-module activity, see tectonic_runtime/events.py
 
 TOOL_CALL_END also carries ``state_delta``: the session-state keys the tool wrote (agent memory).
+Agent events carry ``team`` (derived from the ADK app: the Builder, or the generated project).
+
+Platform hooks (shared tectonic_runtime modules):
+  * FinOps meters every model response's token usage and enforces blocking budgets before calls.
+  * PromptOps receives the Builder's run outcomes for the prompt version each session was served.
+  * Auditability chains these events (wired in server.py through ``hub.add_listener``).
 """
 
 from __future__ import annotations
@@ -96,7 +102,12 @@ class TelemetryHub:
         self._sticky: dict[tuple[str, str], dict] = {}
         self._seq = itertools.count(1)
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._listeners: list = []
         self.server_id = uuid.uuid4().hex
+
+    def add_listener(self, listener) -> None:
+        """In-process consumers (e.g. the audit trail) receive every event synchronously."""
+        self._listeners.append(listener)
 
     def emit(self, event_type: str, **payload: Any) -> None:
         event = {"type": event_type, "seq": next(self._seq), "timestamp": time.time(), **payload}
@@ -105,6 +116,11 @@ class TelemetryHub:
             self._sticky[(event_type, str(event.get(sticky_key)))] = event
         else:
             self._recent.append(event)
+        for listener in self._listeners:
+            try:
+                listener(event)
+            except Exception:  # a broken consumer must never break an agent
+                logger.exception("telemetry listener failed")
         loop = self._loop
         if loop is None or loop.is_closed():
             return
@@ -146,6 +162,36 @@ class TelemetryHub:
 hub = TelemetryHub()
 
 
+def _runtime():
+    """The shared module runtime, if available (the server always has it)."""
+    try:
+        from tectonic_runtime import get_runtime
+
+        return get_runtime()
+    except Exception:  # pragma: no cover - runtime package absent
+        return None
+
+
+def _team(context: Any) -> Optional[str]:
+    try:
+        from tectonic_runtime.identity import app_name_of, team_from_app
+
+        return team_from_app(app_name_of(context))
+    except Exception:
+        return None
+
+
+def _response_model(callback_context: Any, llm_response: Any) -> str:
+    version = getattr(llm_response, "model_version", None)
+    if isinstance(version, str) and version:
+        return version
+    inv = getattr(callback_context, "_invocation_context", None)
+    return _model_name(getattr(inv, "agent", None)) or "unknown"
+
+
+BUILDER_PROMPT = "agent_builder.root"
+
+
 class TelemetryPlugin(BasePlugin):
     """Translates ADK lifecycle callbacks into Command Center events."""
 
@@ -163,6 +209,7 @@ class TelemetryPlugin(BasePlugin):
             invocation_id=invocation_context.invocation_id,
             app_name=getattr(invocation_context, "app_name", ""),
             root_id=getattr(invocation_context.agent, "name", ""),
+            team=_team(invocation_context),
         )
         return None
 
@@ -172,7 +219,25 @@ class TelemetryPlugin(BasePlugin):
             invocation_id=invocation_context.invocation_id,
             app_name=getattr(invocation_context, "app_name", ""),
             root_id=getattr(invocation_context.agent, "name", ""),
+            team=_team(invocation_context),
         )
+        await self._record_prompt_outcome(invocation_context, passed=True)
+
+    async def on_run_error_callback(self, *, invocation_context: Any, error: Exception) -> None:
+        await self._record_prompt_outcome(invocation_context, passed=False)
+
+    async def _record_prompt_outcome(self, invocation_context: Any, passed: bool) -> None:
+        """Coarse automatic signal for PromptOps A/B tests: did the Builder's run finish cleanly?"""
+        if getattr(invocation_context, "app_name", None) != "agent_builder":
+            return
+        rt = _runtime()
+        session = getattr(invocation_context, "session", None)
+        if rt is None or session is None:
+            return
+        try:
+            await rt.module("promptops").record(BUILDER_PROMPT, passed, session_id=session.id, metric="run_completed")
+        except Exception as exc:
+            logger.warning("PromptOps outcome not recorded: %s", exc)
 
     # --- agents -----------------------------------------------------------------------------
     async def before_agent_callback(self, *, agent: Any, callback_context: Any) -> None:
@@ -188,6 +253,7 @@ class TelemetryPlugin(BasePlugin):
                 description=getattr(agent, "description", "") or "",
                 system_prompt=_jsonable(_system_prompt(agent)),
                 model=_model_name(agent),
+                team=_team(callback_context),
             )
         hub.emit("AGENT_STATE_CHANGE", id=agent_id, state="thinking")
         return None
@@ -201,8 +267,22 @@ class TelemetryPlugin(BasePlugin):
         hub.emit("AGENT_STATE_CHANGE", id=agent.name, state="error", detail=str(error)[:500])
 
     # --- model ------------------------------------------------------------------------------
-    async def before_model_callback(self, *, callback_context: Any, llm_request: Any) -> None:
-        hub.emit("AGENT_STATE_CHANGE", id=callback_context.agent_name, state="thinking")
+    async def before_model_callback(self, *, callback_context: Any, llm_request: Any) -> Any:
+        agent_id = callback_context.agent_name
+        rt = _runtime()
+        if rt is not None:
+            try:
+                blocked, reason = await rt.module("finops").is_blocked(_team(callback_context))
+            except Exception as exc:  # guardrail failures must not take agents down
+                logger.warning("FinOps budget check failed: %s", exc)
+                blocked, reason = False, ""
+            if blocked:
+                from google.adk.models.llm_response import LlmResponse
+                from google.genai import types as genai_types
+
+                hub.emit("AGENT_STATE_CHANGE", id=agent_id, state="error", detail="budget exhausted")
+                return LlmResponse(content=genai_types.Content(role="model", parts=[genai_types.Part.from_text(text=reason)]))
+        hub.emit("AGENT_STATE_CHANGE", id=agent_id, state="thinking")
         return None
 
     async def after_model_callback(self, *, callback_context: Any, llm_response: Any) -> None:
@@ -228,13 +308,26 @@ class TelemetryPlugin(BasePlugin):
 
         usage = getattr(llm_response, "usage_metadata", None)
         if usage is not None and not partial:
+            prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
+            completion_tokens = getattr(usage, "candidates_token_count", 0) or 0
+            model = _response_model(callback_context, llm_response)
+            team = _team(callback_context)
             hub.emit(
                 "AGENT_METRICS",
                 id=agent_id,
-                prompt_tokens=getattr(usage, "prompt_token_count", 0) or 0,
-                completion_tokens=getattr(usage, "candidates_token_count", 0) or 0,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
                 total_tokens=getattr(usage, "total_token_count", 0) or 0,
+                model=model,
+                team=team,
             )
+            rt = _runtime()
+            if rt is not None:
+                try:
+                    await rt.module("finops").meter(team=team, agent_id=agent_id, model=model, input_tokens=prompt_tokens,
+                                                    output_tokens=completion_tokens, kind="agent")
+                except Exception as exc:
+                    logger.warning("FinOps metering failed: %s", exc)
         error = getattr(llm_response, "error_message", None)
         if error:
             hub.emit("AGENT_STATE_CHANGE", id=agent_id, state="error", detail=str(error)[:500])
@@ -250,11 +343,12 @@ class TelemetryPlugin(BasePlugin):
         call_id = tool_context.function_call_id or f"{agent_id}:{tool.name}:{time.time_ns()}"
         self._tool_started[call_id] = time.perf_counter()
         hub.emit("AGENT_STATE_CHANGE", id=agent_id, state="tool_execution", detail=tool.name)
-        hub.emit("TOOL_CALL_START", id=agent_id, call_id=call_id, tool_name=tool.name, payload=_jsonable(tool_args))
+        hub.emit("TOOL_CALL_START", id=agent_id, call_id=call_id, tool_name=tool.name, payload=_jsonable(tool_args),
+                 team=_team(tool_context))
         if isinstance(tool, AgentTool):
             child = tool.agent.name
             self._parent_hint[child] = agent_id
-            hub.emit("A2A_MESSAGE", from_id=agent_id, to_id=child, message_summary=_summarize(tool_args))
+            hub.emit("A2A_MESSAGE", from_id=agent_id, to_id=child, message_summary=_summarize(tool_args), team=_team(tool_context))
         return None
 
     async def after_tool_callback(self, *, tool: Any, tool_args: dict, tool_context: Any, result: Any) -> None:

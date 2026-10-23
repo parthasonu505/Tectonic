@@ -27,6 +27,23 @@ except ImportError:  # pragma: no cover - runtime package absent
     def builder_tools(team: str = "default") -> list:
         return []
 
+MANAGED_PROMPT = "agent_builder.root"
+
+
+async def managed_instruction(ctx) -> str:
+    """The Builder's system prompt, served by PromptOps (versioned, A/B-testable, rollback-able).
+
+    Falls back to the code default (ROOT_PROMPT) if the platform runtime is unavailable.
+    """
+    try:
+        from tectonic_runtime import get_runtime
+        from tectonic_runtime.identity import session_id_of
+
+        template, _ = await get_runtime().module("promptops").resolve_template(MANAGED_PROMPT, session_id_of(ctx), ROOT_PROMPT)
+        return template
+    except Exception:
+        return ROOT_PROMPT
+
 root_agent = LlmAgent(
     name="agent_builder",
     model=MODEL,
@@ -34,7 +51,7 @@ root_agent = LlmAgent(
         "Designs and generates runnable local Google ADK agents from a natural-language request: "
         "intent detection, requirements, guardrails, agent cards and code generation."
     ),
-    instruction=ROOT_PROMPT,
+    instruction=managed_instruction,
     tools=[
         AgentTool(agent=intent_detection_agent),
         AgentTool(agent=requirement_understanding_agent),

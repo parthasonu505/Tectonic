@@ -64,7 +64,10 @@ async def run_office_simulation(
 
     async def call(agent: str, module: str, op: str, payload: dict[str, Any], session: str | None = None) -> Any:
         emit("AGENT_STATE_CHANGE", id=agent, state="tool_execution", detail=f"{module}.{op}")
-        result = await rt.invoke(module, op, payload, CallContext(agent_id=agent, session_id=session))
+        # Same inheritance as real ADK runs: the Builder is admin, workers are scoped to the team.
+        ctx = (CallContext(agent_id=agent, session_id=session, role="admin", team=BUILDER) if agent == BUILDER
+               else CallContext(agent_id=agent, session_id=session, role="worker", team=TEAM))
+        result = await rt.invoke(module, op, payload, ctx)
         counts[module] = counts.get(module, 0) + 1
         emit("AGENT_STATE_CHANGE", id=agent, state="thinking")
         await asyncio.sleep(rng.uniform(0.15, 0.5))
@@ -92,6 +95,12 @@ async def run_office_simulation(
             "Never include full card numbers or customer emails in replies.",
         ]:
             await call(BUILDER, "long_term_memory", "share", {"content": fact, "team": TEAM})
+        # Provision the team: budget guardrail + knowledge the workers will retrieve from.
+        await call(BUILDER, "finops", "set_budget", {"team": TEAM, "limit_usd": 5.0, "enforcement": "alert"})
+        await call(BUILDER, "agentic_rag", "ingest", {"title": "Invoice desk policy", "namespace": TEAM, "text": (
+            "Invoices are issued in EUR with VAT shown separately.\n\n"
+            "Refunds above 500 EUR require approval from the finance controller under policy FIN-204.\n\n"
+            "Payment terms are net 30 days; late payments incur a 2% monthly fee.")})
         await rt.module("tool_orchestration").register_callable(  # type: ignore[attr-defined]
             "account_lookup", account_lookup, owner=BUILDER, max_retries=2, backoff="fixed")
 
@@ -124,6 +133,9 @@ async def run_office_simulation(
             for i in range(rounds):
                 session = f"billing-{i}"
                 await call("billing_worker", "long_term_memory", "recall", {"query": "invoice currency refund approval", "scope": f"shared:{TEAM}"}, session)
+                if i % 2 == 0:
+                    await call("billing_worker", "agentic_rag", "ask", {"question": "Who approves refunds over 500 EUR?", "max_hops": 2}, session)
+                    await call("billing_worker", "finops", "check", {}, session)
                 total = await call("billing_worker", "tool_orchestration", "call_tool",
                                    {"tool": "calculate", "arguments": {"expression": f"{rng.randint(80, 900)} * 1.2"}}, session)
                 amount = (total.data or {}).get("output", {}).get("value") if total.ok else None
@@ -150,6 +162,9 @@ async def run_office_simulation(
                 await call("report_worker", "tool_orchestration", "call_tool", {"tool": "current_time"})
                 await call("report_worker", "short_term_memory", "append", {"content": f"Report #{i + 1}: shift progressing normally", "role": "agent"})
                 await call("report_worker", "short_term_memory", "get_context", {})
+                if i == rounds - 1:
+                    await call("report_worker", "finops", "report", {})
+                    await call("report_worker", "auditability", "verify", {})
 
         await asyncio.gather(intake_shift(), billing_shift(), research_shift(), report_shift())
         for name in WORKERS:

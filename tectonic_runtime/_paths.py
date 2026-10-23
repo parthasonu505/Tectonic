@@ -15,7 +15,15 @@ MODULE_PACKAGES = {
     "short-term-memory": "short_term_memory",
     "tool-orchestration": "tool_orchestration",
     "long-term-memory": "long_term_memory",
+    "agentic-rag": "agentic_rag",
+    "finops": "finops",
+    "promptops": "promptops",
+    "vector-db": "vector_db",
+    "auditability": "auditability",
 }
+
+# Persistent state for the in-process platform (override per store via TECTONIC_*_PATH env vars).
+STATE_DIR = PROJECT_ROOT / "generated_agents" / "_platform"
 
 
 def ensure_module_paths() -> None:

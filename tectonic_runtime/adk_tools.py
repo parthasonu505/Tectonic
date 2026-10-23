@@ -4,8 +4,12 @@
     LlmAgent(..., tools=[*my_tools, *worker_tools(team="invoice_bot")])
 
 Every tool resolves the calling agent from ADK's ToolContext, so module activity in the Agent
-Office is attributed to the right agent automatically. ``team`` names the shared memory scope
-(``shared:<team>``) through which the Builder hands knowledge to the workers it generates.
+Office is attributed to the right agent automatically.
+
+Permission inheritance (see tectonic_runtime.identity): the role and team come from the ADK app
+the agent runs in. Inside the Builder (app ``agent_builder``) every tool call is ``admin``; inside
+a generated project (``generated_agents.<project>.<project>``) it is a ``worker`` scoped to team
+``<project>`` — its budget, knowledge namespace, audit visibility and ``shared:<team>`` memory.
 """
 
 from __future__ import annotations
@@ -16,17 +20,20 @@ from typing import Any, Callable, Optional
 from google.adk.tools import ToolContext
 
 from .base import CallContext
+from .identity import app_name_of, role_from_app, session_id_of, team_from_app
 from .runtime import get_runtime
 
 
-def _ctx(tool_context: Optional[ToolContext]) -> CallContext:
+def _ctx(tool_context: Optional[ToolContext], team: str | None = None) -> CallContext:
     if tool_context is None:
-        return CallContext()
-    session = getattr(tool_context, "session", None)
+        return CallContext(team=team)
+    app = app_name_of(tool_context)
     return CallContext(
         agent_id=getattr(tool_context, "agent_name", None) or "anonymous",
         tenant_id=getattr(tool_context, "user_id", None) or "default",
-        session_id=getattr(session, "id", None),
+        session_id=session_id_of(tool_context),
+        role=role_from_app(app) if app else "worker",
+        team=team_from_app(app) or team,
     )
 
 
@@ -141,6 +148,142 @@ async def core_call_tool(tool: str, arguments_json: str = "{}", tool_context: To
                        {"tool": tool, "arguments": _parse_json(arguments_json, "arguments_json") or {}}, tool_context)
 
 
+# --- platform modules: knowledge, spend, prompts, audit (workers + Builder) ----------------------
+async def core_knowledge_search(query: str, top_k: int = 6, tool_context: ToolContext = None) -> dict:
+    """Agentic retrieval over your team's knowledge base and the shared corpus: routed, self-correcting,
+    multi-hop search that returns assembled context with numbered citations.
+
+    Args:
+        query: What you need to know.
+        top_k: Ignored beyond the module's assembly budget; kept for compatibility.
+
+    Returns:
+        dict with data.context (numbered passages), data.citations, data.groundedness, data.hops.
+    """
+    return await _call("agentic_rag", "retrieve", {"query": query}, tool_context)
+
+
+async def core_ask_knowledge(question: str, tool_context: ToolContext = None) -> dict:
+    """Answer a question from the knowledge base with inline citations like [1].
+
+    Args:
+        question: The question to answer.
+
+    Returns:
+        dict with data.answer, data.citations, data.confidence ("high" | "low").
+    """
+    return await _call("agentic_rag", "ask", {"question": question}, tool_context)
+
+
+async def core_add_knowledge(title: str, text: str, tool_context: ToolContext = None) -> dict:
+    """Add a document to your team's knowledge base (chunked, embedded and indexed for retrieval).
+
+    Args:
+        title: Short document title.
+        text: The document text.
+
+    Returns:
+        dict with data.doc_id and data.chunks.
+    """
+    return await _call("agentic_rag", "ingest", {"title": title, "text": text}, tool_context)
+
+
+async def core_spend_status(tool_context: ToolContext = None) -> dict:
+    """Your team's LLM spend this month, forecast and budget status (check before expensive work).
+
+    Returns:
+        dict with data.total_cost, data.forecast and data.teams[0].budget (limit, utilisation, blocked).
+    """
+    return await _call("finops", "report", {}, tool_context)
+
+
+async def core_prompt_feedback(prompt_name: str, passed: bool, tool_context: ToolContext = None) -> dict:
+    """Report whether the prompt version you were served led to a successful outcome (feeds A/B tests).
+
+    Args:
+        prompt_name: Managed prompt name, e.g. "agent_builder.root".
+        passed: True if the task succeeded.
+
+    Returns:
+        dict with data.version and data.samples.
+    """
+    return await _call("promptops", "record_outcome", {"prompt_name": prompt_name, "passed": passed}, tool_context)
+
+
+async def core_audit_trail(question: str = "", limit: int = 20, tool_context: ToolContext = None) -> dict:
+    """Read the tamper-evident audit trail visible to you (workers: your team's entries).
+
+    Args:
+        question: Optional plain-language question, e.g. "tool calls by billing_worker today". Empty = latest entries.
+        limit: Maximum entries.
+
+    Returns:
+        dict with data.events [{sequence, event_type, source, occurred_at, payload}] and data.total.
+    """
+    if question.strip():
+        return await _call("auditability", "ask", {"question": question, "limit": limit}, tool_context)
+    return await _call("auditability", "query", {"limit": limit}, tool_context)
+
+
+# --- Builder-only administration (admin permission enforced by the modules) --------------------
+async def core_provision_team(project: str, monthly_budget_usd: float = 5.0, enforcement: str = "alert",
+                              tool_context: ToolContext = None) -> dict:
+    """Provision a generated project's team: FinOps budget (alert or block), knowledge namespace and audit scope.
+    Its worker agents inherit this scope automatically.
+
+    Args:
+        project: The generated project's snake_case name (its team name).
+        monthly_budget_usd: Monthly LLM budget for the team.
+        enforcement: "alert" (warn at threshold) or "block" (stop LLM calls at the limit).
+
+    Returns:
+        dict with data (the budget policy).
+    """
+    return await _call("finops", "set_budget", {"team": project, "limit_usd": monthly_budget_usd,
+                                                 "enforcement": enforcement}, tool_context)
+
+
+async def core_ingest_knowledge(project: str, title: str, text: str, tool_context: ToolContext = None) -> dict:
+    """Load a document into a project's knowledge base (or "shared" for every team) for its workers' RAG.
+
+    Args:
+        project: Team/project namespace, or "shared".
+        title: Document title.
+        text: Document text (requirements, policies, reference data).
+
+    Returns:
+        dict with data.doc_id, data.chunks, data.namespace.
+    """
+    return await _call("agentic_rag", "ingest", {"title": title, "text": text, "namespace": project}, tool_context)
+
+
+async def core_platform_spend(tool_context: ToolContext = None) -> dict:
+    """Spend across all teams (Builder view): totals, forecast, budgets and per-agent/model breakdown."""
+    return await _call("finops", "report", {}, tool_context)
+
+
+async def core_publish_prompt(prompt_name: str, template: str, activate: bool = False, tool_context: ToolContext = None) -> dict:
+    """Version a system prompt in PromptOps. With activate=false it stays a DRAFT (A/B-testable from the UI).
+
+    Args:
+        prompt_name: e.g. "<project>.root".
+        template: Full prompt text.
+        activate: Promote immediately to ACTIVE.
+
+    Returns:
+        dict with data.version_id and data.status.
+    """
+    result = await _call("promptops", "register", {"prompt_name": prompt_name, "template": template}, tool_context)
+    if activate and result.get("status") == "success":
+        return await _call("promptops", "promote", {"version_id": result["data"]["version_id"]}, tool_context)
+    return result
+
+
+async def core_verify_audit(tool_context: ToolContext = None) -> dict:
+    """Verify the audit hash chain end-to-end (detects tampering; returns the first broken sequence)."""
+    return await _call("auditability", "verify", {}, tool_context)
+
+
 # --- team-bound tools ------------------------------------------------------------------------
 def _team_tools(team: str) -> list[Callable[..., Any]]:
     async def core_recall(query: str, scope: str = "", top_k: int = 5, tool_context: ToolContext = None) -> dict:
@@ -180,13 +323,18 @@ You can use these shared platform tools:
 - core_memory_note / core_memory_context: keep and read short-term working notes for this session.
 - core_remember / core_recall: durable memory. core_recall(scope="team") reads what your team shared; core_share_knowledge publishes to it.
 - core_list_tools / core_call_tool: run registered tools with automatic retries and circuit breaking.
+- core_knowledge_search / core_ask_knowledge: answer from your team's knowledge base with citations — prefer this over guessing facts; core_add_knowledge stores new reference documents.
+- core_spend_status: your team's LLM budget; if it reports blocked or high utilisation, keep answers short and avoid optional calls.
+- core_audit_trail: read the audit trail of your team's actions when asked what happened.
 """
 
 
 def worker_tools(team: str = "default") -> list[Callable[..., Any]]:
     """Tool set for generated worker agents."""
     return [core_guardrails_check, core_classify_intent, core_define_intents, core_memory_note, core_memory_context,
-            core_remember, *_team_tools(team), core_list_tools, core_call_tool]
+            core_remember, *_team_tools(team), core_list_tools, core_call_tool,
+            core_knowledge_search, core_ask_knowledge, core_add_knowledge, core_spend_status, core_prompt_feedback,
+            core_audit_trail]
 
 
 def builder_tools(team: str = "default") -> list[Callable[..., Any]]:
@@ -204,4 +352,5 @@ def builder_tools(team: str = "default") -> list[Callable[..., Any]]:
         return await _call("long_term_memory", "share", {"content": content, "team": project}, tool_context)
 
     recall, _share = _team_tools(team)
-    return [core_remember, recall, core_share_with_project]
+    return [core_remember, recall, core_share_with_project, core_provision_team, core_ingest_knowledge,
+            core_knowledge_search, core_platform_spend, core_publish_prompt, core_verify_audit]

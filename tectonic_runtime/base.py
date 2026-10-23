@@ -20,17 +20,34 @@ from enum import Enum
 from typing import Any, Awaitable, Callable
 
 from .events import ModuleEventBus
+from .models import current_caller
 
 OperationFn = Callable[..., Awaitable[Any]]
 
 
+ROLES = ("worker", "admin", "operator")
+
+
 @dataclass(frozen=True)
 class CallContext:
-    """Who is calling. ``agent_id`` drives the office visualisation and memory scoping."""
+    """Who is calling.
+
+    ``agent_id`` drives the office visualisation and memory scoping. ``role`` gates operations:
+    the Builder Agent runs as ``admin``, generated workers as ``worker`` and the Command Center UI
+    as ``operator`` (admin-equivalent, attributed separately in the audit trail). ``team`` is the
+    project namespace a worker inherits from the Builder (its generated project), used to scope
+    budgets, knowledge, prompts and audit queries.
+    """
 
     agent_id: str = "anonymous"
     tenant_id: str = "default"
     session_id: str | None = None
+    role: str = "worker"
+    team: str | None = None
+
+    @property
+    def is_admin(self) -> bool:
+        return self.role in ("admin", "operator")
 
 
 @dataclass
@@ -60,6 +77,7 @@ class Operation:
     fn: OperationFn
     summary: str
     params: list[dict[str, Any]] = field(default_factory=list)
+    permission: str = "worker"
 
 
 def to_jsonable(value: Any) -> Any:
@@ -83,17 +101,24 @@ def _short(value: Any, limit: int = 160) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def operation(summary: str) -> Callable[[OperationFn], OperationFn]:
-    """Mark a ``async def op(self, ctx, **params)`` method as a public module operation."""
+def operation(summary: str, permission: str = "worker") -> Callable[[OperationFn], OperationFn]:
+    """Mark a ``async def op(self, ctx, **params)`` method as a public module operation.
+
+    ``permission="admin"`` restricts it to the Builder Agent and the operator UI; workers get a
+    permission-denied result (and an audited MODULE_ACCESS_DENIED event).
+    """
+    if permission not in ("worker", "admin"):
+        raise ValueError(f"unknown permission {permission!r}")
 
     def mark(fn: OperationFn) -> OperationFn:
         fn.__module_operation__ = summary  # type: ignore[attr-defined]
+        fn.__module_permission__ = permission  # type: ignore[attr-defined]
         return fn
 
     return mark
 
 
-_RESERVED = frozenset({"invoke", "boot", "setup", "describe", "summarize", "state", "operations"})
+_RESERVED = frozenset({"invoke", "boot", "setup", "describe", "summarize", "state", "operations", "runtime"})
 
 
 class BaseModule:
@@ -109,6 +134,8 @@ class BaseModule:
         self._active = 0
         self._total = 0
         self._state = "offline"
+        # Set by ModuleRuntime so modules can compose (e.g. Agentic-RAG retrieving via Vector DB).
+        self.runtime: Any = None
         self.operations: dict[str, Operation] = {}
         for attr in dir(type(self)):
             fn = getattr(self, attr)
@@ -126,7 +153,7 @@ class BaseModule:
                 for p in list(inspect.signature(fn).parameters.values())[1:]  # skip ctx
                 if p.kind in (p.POSITIONAL_OR_KEYWORD, p.KEYWORD_ONLY)
             ]
-            self.operations[attr] = Operation(attr, fn, summary, params)
+            self.operations[attr] = Operation(attr, fn, summary, params, getattr(fn, "__module_permission__", "worker"))
 
     # --- lifecycle ---------------------------------------------------------------------------
     async def setup(self) -> None:
@@ -138,7 +165,10 @@ class BaseModule:
             "label": self.label,
             "description": self.description,
             "category": self.category,
-            "operations": [{"name": o.name, "summary": o.summary, "params": o.params} for o in self.operations.values()],
+            "operations": [
+                {"name": o.name, "summary": o.summary, "params": o.params, "permission": o.permission}
+                for o in self.operations.values()
+            ],
         }
 
     @property
@@ -190,6 +220,12 @@ class BaseModule:
             expected = ", ".join(p["name"] + ("" if p["required"] else "?") for p in op.params)
             return ModuleResult(False, self.name, op_name, call_id, 0.0, error=f"invalid arguments ({exc}); expected: {expected}")
 
+        if op.permission == "admin" and not ctx.is_admin:
+            reason = f"permission denied: {self.name}.{op_name} requires admin (caller {ctx.agent_id!r} is {ctx.role})"
+            self._bus.emit("MODULE_ACCESS_DENIED", module=self.name, operation=op_name, call_id=call_id,
+                           agent_id=ctx.agent_id, role=ctx.role, team=ctx.team, reason=reason)
+            return ModuleResult(False, self.name, op_name, call_id, 0.0, error=reason)
+
         try:
             await self.boot()
         except Exception as exc:
@@ -199,18 +235,23 @@ class BaseModule:
         self._total += 1
         self._set_state("busy", op_name)
         self._bus.emit("MODULE_CALL_START", module=self.name, operation=op_name, call_id=call_id,
-                       agent_id=ctx.agent_id, session_id=ctx.session_id, payload=to_jsonable(payload))
+                       agent_id=ctx.agent_id, session_id=ctx.session_id, role=ctx.role, team=ctx.team,
+                       payload=to_jsonable(payload))
+        # Attribute any model calls made by this operation (FinOps) to the calling agent and team.
+        caller_token = current_caller.set({"agent_id": ctx.agent_id, "team": ctx.team, "purpose": f"{self.name}.{op_name}"})
         try:
             data = to_jsonable(await op.fn(ctx, **payload))
             ok, error = True, None
         except Exception as exc:
             data, ok, error = None, False, f"{type(exc).__name__}: {exc}"
+        finally:
+            current_caller.reset(caller_token)
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
         self._active -= 1
 
         result = ModuleResult(ok, self.name, op_name, call_id, duration_ms, data=data, error=error)
         self._bus.emit("MODULE_CALL_END", module=self.name, operation=op_name, call_id=call_id,
-                       agent_id=ctx.agent_id, session_id=ctx.session_id,
+                       agent_id=ctx.agent_id, session_id=ctx.session_id, role=ctx.role, team=ctx.team,
                        status="success" if ok else "error", duration_ms=duration_ms,
                        summary=self.summarize(op_name, data) if ok else (error or ""),
                        **({"result": data} if ok else {"error": error}))

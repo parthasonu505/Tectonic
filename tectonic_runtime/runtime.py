@@ -19,6 +19,12 @@ from .services.intent_service import IntentDetectionModule
 from .services.long_term_memory_service import LongTermMemoryModule
 from .services.short_term_memory_service import ShortTermMemoryModule
 from .services.tool_orchestration_service import ToolOrchestrationModule
+from .services.agentic_rag_service import AgenticRAGModule
+from .services.auditability_service import AuditabilityModule
+from .services.finops_service import FinOpsModule
+from .services.promptops_service import PromptOpsModule
+from .services.vector_db_service import VectorDBModule
+from . import models
 
 MODULE_CLASSES: tuple[type[BaseModule], ...] = (
     GuardrailsModule,
@@ -26,6 +32,11 @@ MODULE_CLASSES: tuple[type[BaseModule], ...] = (
     ShortTermMemoryModule,
     LongTermMemoryModule,
     ToolOrchestrationModule,
+    AgenticRAGModule,
+    VectorDBModule,
+    FinOpsModule,
+    PromptOpsModule,
+    AuditabilityModule,
 )
 
 
@@ -33,7 +44,19 @@ class ModuleRuntime:
     def __init__(self, bus: ModuleEventBus | None = None) -> None:
         self.bus = bus or default_bus
         self.modules: dict[str, BaseModule] = {cls.name: cls(self.bus) for cls in MODULE_CLASSES}
+        for module in self.modules.values():
+            module.runtime = self
+        # Platform-internal model calls (RAG critic, PromptOps reflection, audit NL queries) are
+        # metered into FinOps just like agent LLM calls.
+        models.set_usage_hook(self._meter_platform_usage)
         self.announce()
+
+    async def _meter_platform_usage(self, event: dict[str, Any]) -> None:
+        finops = self.modules.get("finops")
+        if finops is not None:
+            await finops.meter(team=event.get("team"), agent_id=event.get("agent_id") or "runtime", model=event["model"],  # type: ignore[attr-defined]
+                               input_tokens=int(event["input_tokens"]), output_tokens=int(event["output_tokens"]),
+                               kind="embedding" if event.get("kind") == "embed" else "platform")
 
     def announce(self) -> None:
         """(Re-)emit registration + current state for every module, e.g. when a dashboard attaches."""

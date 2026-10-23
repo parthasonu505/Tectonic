@@ -71,6 +71,13 @@ Then hand the project's key requirements to its worker agents: call `core_share_
 (2-6 items: the goal, storage choice, data rules, user preferences). Generated workers share the platform's core
 modules (guardrails, intent detection, short/long-term memory, tool orchestration) and read these via core_recall(scope="team").
 
+Step 7b: Provision the Project Team (platform governance)
+- Call `core_provision_team` with the project name (default monthly_budget_usd=5, enforcement="alert" unless the user
+  asked for a hard cap). Every worker of the project inherits this budget, knowledge namespace and audit scope.
+- Call `core_ingest_knowledge` with the project name, title "Requirements", and a concise text of the final
+  specification (goal, tools, data rules, guardrails) so workers can answer from it via Agentic RAG with citations.
+- If the user supplied reference material (policies, FAQs, data dictionaries), ingest each as its own document.
+
 Step 8: Final Delivery
 Call `persist_progress` to save the finalized session state.
 Call `core_remember` with the user's confirmed preferences (one concise fact) so future builds start from them.

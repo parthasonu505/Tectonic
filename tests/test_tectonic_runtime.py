@@ -9,7 +9,7 @@ import pytest
 from tectonic_runtime import CallContext, ModuleEventBus, reset_runtime
 from tectonic_runtime.base import BaseModule, operation
 
-BUILDER = CallContext(agent_id="agent_builder")
+BUILDER = CallContext(agent_id="agent_builder", role="admin")
 WORKER = CallContext(agent_id="billing_worker")
 
 
@@ -19,8 +19,7 @@ def events() -> list[dict]:
 
 
 @pytest.fixture
-def rt(tmp_path, monkeypatch, events):
-    monkeypatch.setenv("TECTONIC_LTM_PATH", str(tmp_path / "ltm.json"))
+def rt(events):
     bus = ModuleEventBus()
     bus.subscribe(events.append)
     return reset_runtime(bus)
@@ -29,7 +28,8 @@ def rt(tmp_path, monkeypatch, events):
 # --- contract & events -------------------------------------------------------------------------
 async def test_registers_all_modules_offline(rt, events):
     registered = {e["module"] for e in events if e["type"] == "MODULE_REGISTERED"}
-    assert registered == {"guardrails", "intent_detection", "short_term_memory", "long_term_memory", "tool_orchestration"}
+    assert registered == {"guardrails", "intent_detection", "short_term_memory", "long_term_memory", "tool_orchestration",
+                          "agentic_rag", "vector_db", "finops", "promptops", "auditability"}
     assert all(e["state"] == "offline" for e in events if e["type"] == "MODULE_STATE")
 
 
@@ -158,7 +158,7 @@ async def test_circuit_breaker_opens_on_persistent_failure(rt):
 
 
 # --- long-term memory ----------------------------------------------------------------------------
-async def test_long_term_memory_sharing_privacy_and_persistence(rt, tmp_path, monkeypatch):
+async def test_long_term_memory_sharing_privacy_and_persistence(rt):
     await rt.invoke("long_term_memory", "share", {"content": "Invoices are issued in EUR with VAT", "team": "billing"}, BUILDER)
     await rt.invoke("long_term_memory", "remember", {"content": "builder private draft"}, BUILDER)
 
@@ -187,7 +187,8 @@ async def test_adk_tools_attribute_calls_to_the_calling_agent(rt, events):
 
     names = {f.__name__ for f in worker_tools(team="demo")}
     assert {"core_guardrails_check", "core_recall", "core_share_knowledge", "core_call_tool"} <= names
-    assert {f.__name__ for f in builder_tools()} == {"core_remember", "core_recall", "core_share_with_project"}
+    assert {"core_remember", "core_recall", "core_share_with_project", "core_provision_team", "core_ingest_knowledge",
+            "core_publish_prompt", "core_verify_audit"} <= {f.__name__ for f in builder_tools()}
 
 
 async def test_adk_tools_build_valid_function_declarations():
@@ -208,7 +209,8 @@ async def test_office_simulation_exercises_every_module(rt, events):
     agent_events: list[tuple[str, dict]] = []
     summary = await run_office_simulation(rt, agent_events=lambda t, **p: agent_events.append((t, p)), rounds=1, seed=7)
     assert summary["status"] == "completed"
-    assert set(summary["calls"]) == {"guardrails", "intent_detection", "short_term_memory", "long_term_memory", "tool_orchestration"}
+    assert {"guardrails", "intent_detection", "short_term_memory", "long_term_memory", "tool_orchestration",
+            "finops", "agentic_rag"} <= set(summary["calls"])
     spawned = {p["id"] for t, p in agent_events if t == "AGENT_CREATED"}
     assert {"agent_builder", "intake_agent", "billing_worker", "research_worker", "report_worker"} <= spawned
     assert any(e["type"] == "MODULE_CALL_END" for e in events)

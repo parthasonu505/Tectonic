@@ -13,6 +13,10 @@ const TILES: Record<WindowId, string> = {
   events: 'linear-gradient(160deg, #FDE68A 0%, #F59E0B 55%, #EA580C 100%)',
   sandbox: 'linear-gradient(160deg, #3F3F46 0%, #18181B 100%)',
   inspector: 'linear-gradient(160deg, #93C5FD 0%, #3B82F6 55%, #1D4ED8 100%)',
+  knowledge: 'linear-gradient(160deg, #A5F3FC 0%, #22D3EE 45%, #0E7490 100%)',
+  finops: 'linear-gradient(160deg, #BBF7D0 0%, #22C55E 50%, #15803D 100%)',
+  promptops: 'linear-gradient(160deg, #F5D0FE 0%, #C084FC 50%, #7E22CE 100%)',
+  audit: 'linear-gradient(160deg, #FEF3C7 0%, #F59E0B 50%, #B45309 100%)',
 };
 
 const BASE = 44;

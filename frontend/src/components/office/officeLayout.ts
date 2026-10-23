@@ -18,6 +18,8 @@ const ROW_SPACING_Z = 2.9;
 const PER_ROW = 5;
 const STATION_SPACING_X = 4.4;
 const STATION_Z = -5.6;
+const STATION_ROW_Z = 3.6; // second row of stations sits further back
+const STATIONS_PER_ROW = 5;
 const BUILDER_POS: Vec3 = [0, 0, -1.4];
 
 /**
@@ -52,14 +54,17 @@ export function layoutOffice(order: string[], agents: Record<string, AgentMeta>,
 
   const stations: Record<string, Vec3> = {};
   modules.forEach((m, i) => {
-    stations[m] = [(i - (modules.length - 1) / 2) * STATION_SPACING_X, 0, STATION_Z];
+    const row = Math.floor(i / STATIONS_PER_ROW);
+    const inRow = Math.min(STATIONS_PER_ROW, modules.length - row * STATIONS_PER_ROW);
+    const col = i % STATIONS_PER_ROW;
+    stations[m] = [(col - (inRow - 1) / 2) * STATION_SPACING_X, 0, STATION_Z - row * STATION_ROW_Z];
   });
 
   const xs = [...Object.values(desks), ...Object.values(stations)].map((p) => p[0]);
   const zs = [...Object.values(desks), ...Object.values(stations)].map((p) => p[2]);
   const minX = Math.min(-6, ...xs) - 2.5;
   const maxX = Math.max(6, ...xs) + 2.5;
-  const minZ = Math.min(STATION_Z, ...zs) - 2.4;
+  const minZ = Math.min(STATION_Z, ...zs) - 2.4; // includes every station row
   const maxZ = Math.max(2, ...zs) + 2.6;
   const width = maxX - minX;
   const depth = maxZ - minZ;

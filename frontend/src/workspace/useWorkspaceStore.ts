@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 import { createJSONStorage, persist, type StateStorage } from 'zustand/middleware';
 
-export type WindowId = 'chat' | 'command' | 'blueprint' | 'roster' | 'events' | 'sandbox' | 'inspector';
-export type PresetId = 'build' | 'monitor' | 'debug';
+export type WindowId = 'chat' | 'command' | 'blueprint' | 'roster' | 'events' | 'sandbox' | 'inspector' | 'knowledge' | 'finops' | 'promptops' | 'audit';
+export type PresetId = 'build' | 'monitor' | 'debug' | 'platform';
 
 export interface Cell {
   x: number;
@@ -15,7 +15,7 @@ export interface Cell {
 export const GRID_COLS = 24;
 export const GRID_ROWS = 24;
 
-export const ALL_WINDOWS: WindowId[] = ['chat', 'command', 'blueprint', 'roster', 'events', 'sandbox', 'inspector'];
+export const ALL_WINDOWS: WindowId[] = ['chat', 'command', 'blueprint', 'roster', 'events', 'sandbox', 'inspector', 'knowledge', 'finops', 'promptops', 'audit'];
 
 interface Preset {
   label: string;
@@ -58,6 +58,17 @@ export const PRESETS: Record<PresetId, Preset> = {
       events: { x: 15, y: 14, w: 9, h: 10 },
     },
   },
+  platform: {
+    label: 'Platform',
+    description: 'Knowledge (RAG + vectors), FinOps, PromptOps and the audit trail',
+    layout: {
+      knowledge: { x: 0, y: 0, w: 10, h: 14 },
+      finops: { x: 10, y: 0, w: 7, h: 14 },
+      promptops: { x: 17, y: 0, w: 7, h: 14 },
+      audit: { x: 0, y: 14, w: 14, h: 10 },
+      command: { x: 14, y: 14, w: 10, h: 10 },
+    },
+  },
 };
 
 const FALLBACK: Record<WindowId, Cell> = {
@@ -68,6 +79,10 @@ const FALLBACK: Record<WindowId, Cell> = {
   events: { x: 17, y: 14, w: 7, h: 10 },
   sandbox: { x: 6, y: 0, w: 10, h: 16 },
   inspector: { x: 12, y: 0, w: 12, h: 16 },
+  knowledge: { x: 0, y: 0, w: 10, h: 14 },
+  finops: { x: 10, y: 0, w: 7, h: 14 },
+  promptops: { x: 12, y: 0, w: 12, h: 14 },
+  audit: { x: 0, y: 14, w: 14, h: 10 },
 };
 
 function presetState(preset: PresetId) {
@@ -177,7 +192,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
         })),
     }),
     {
-      name: 'tectonic.workspace.v2',
+      name: 'tectonic.workspace.v3',
       storage: createJSONStorage(() => safeStorage),
       partialize: (s) => ({ preset: s.preset, layouts: s.layouts, minimized: s.minimized, closed: s.closed }),
       // Drop unknown ids / fill new windows so an old saved layout never breaks the grid.
