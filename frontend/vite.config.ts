@@ -4,6 +4,10 @@ import fs from 'fs';
 import path from 'path';
 import http from 'http';
 
+// Backend (server.py) port; override with TECTONIC_BACKEND_PORT when 8000 is taken.
+const BACKEND_PORT = Number(process.env.TECTONIC_BACKEND_PORT ?? 8000);
+const BACKEND = `127.0.0.1:${BACKEND_PORT}`;
+
 function backendBridgePlugin(): Plugin {
   return {
     name: 'backend-bridge',
@@ -30,15 +34,15 @@ function backendBridgePlugin(): Plugin {
         if (isAdkRoute) {
           const adkHeaders = {
             ...req.headers,
-            host: '127.0.0.1:8000',
-            origin: 'http://127.0.0.1:8000',
-            referer: 'http://127.0.0.1:8000/'
+            host: BACKEND,
+            origin: `http://${BACKEND}`,
+            referer: `http://${BACKEND}/`
           };
 
           const adkReq = http.request(
             {
               hostname: '127.0.0.1',
-              port: 8000,
+              port: BACKEND_PORT,
               path: req.url,
               method: req.method,
               headers: adkHeaders
@@ -412,5 +416,18 @@ function backendBridgePlugin(): Plugin {
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), backendBridgePlugin()]
+  plugins: [react(), backendBridgePlugin()],
+  server: {
+    proxy: {
+      // Command Center telemetry stream from server.py
+      '/ws/telemetry': { target: `ws://${BACKEND}`, ws: true, changeOrigin: true },
+      // Shared core-module registry and live office simulation (server.py)
+      '/modules': {
+        target: `http://${BACKEND}`,
+        changeOrigin: true,
+        // The ADK server rejects unknown origins (403); present the backend's own origin, as the ADK proxy above does.
+        configure: (proxy) => proxy.on('proxyReq', (proxyReq) => proxyReq.setHeader('origin', `http://${BACKEND}`)),
+      }
+    }
+  }
 });

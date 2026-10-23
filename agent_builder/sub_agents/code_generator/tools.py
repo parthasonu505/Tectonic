@@ -88,6 +88,25 @@ def render_instruction(template, state_keys=()):
     return provider
 '''
 
+_GEN_CORE_MODULES = '''"""Shared Tectonic core modules for this project's agents.
+
+Inside the Tectonic agent server, every agent gets the platform's shared modules (guardrails,
+intent detection, short/long-term memory, tool orchestration) as ADK tools, with activity
+streamed to the Command Center. Run standalone (plain `adk run`), the import fails and the
+agents simply work without them.
+"""
+
+TEAM = "{project}"
+
+try:
+    from tectonic_runtime.adk_tools import CORE_MODULE_INSTRUCTIONS, worker_tools
+
+    CORE_MODULE_TOOLS = worker_tools(team=TEAM)
+except ImportError:
+    CORE_MODULE_TOOLS = []
+    CORE_MODULE_INSTRUCTIONS = ""
+'''
+
 _GEN_ENV = """# Configure Google Gemini API Key
 GOOGLE_API_KEY=
 GEMINI_API_KEY=
@@ -154,6 +173,7 @@ def _agent_py(card: dict, cards: dict, is_root: bool) -> str:
     imports.append(f"from google.adk.agents import {classes[kind]}")
     if kind == "llm":
         imports.append(f"from {prefix}shared_libraries.constants import MODEL, render_instruction" if is_root else "from ...shared_libraries.constants import MODEL, render_instruction")
+        imports.append(f"from {prefix}shared_libraries.core_modules import CORE_MODULE_INSTRUCTIONS, CORE_MODULE_TOOLS")
         imports.append("from . import prompt" if not is_root else "from . import prompt")
     tool_lines, tool_names = _tool_import_lines(card, prefix)
     if kind == "llm":
@@ -168,9 +188,8 @@ def _agent_py(card: dict, cards: dict, is_root: bool) -> str:
     body = [f"{var} = {classes[kind]}(", f'    name="{name}",', f"    description={description},"]
     if kind == "llm":
         body.append("    model=MODEL,")
-        body.append("    instruction=render_instruction(prompt.INSTRUCTION, prompt.STATE_READS),")
-        if tool_names:
-            body.append(f"    tools=[{', '.join(tool_names)}],")
+        body.append("    instruction=render_instruction(prompt.INSTRUCTION + CORE_MODULE_INSTRUCTIONS, prompt.STATE_READS),")
+        body.append(f"    tools=[{''.join(n + ', ' for n in tool_names)}*CORE_MODULE_TOOLS],")
         if card.get("output_key"):
             body.append(f"    output_key={json.dumps(card['output_key'])},")
     if kind == "loop":
@@ -292,6 +311,7 @@ GEMINI_MODEL={configured_model}
     emit(f"{project}/__init__.py", '"""Generated Google ADK agent package."""\n\nfrom . import agent\n')
     emit(f"{project}/shared_libraries/__init__.py", "")
     emit(f"{project}/shared_libraries/constants.py", _GEN_CONSTANTS)
+    emit(f"{project}/shared_libraries/core_modules.py", _GEN_CORE_MODULES.replace("{project}", project))
     emit(f"{project}/tools/__init__.py", '"""Tool implementations for the generated agents."""\n')
     emit(f"{project}/sub_agents/__init__.py", "")
     root = roots[0]

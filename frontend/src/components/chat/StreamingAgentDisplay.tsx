@@ -1,86 +1,87 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { Brain, Cpu, Network, Search, Shield, Code, GitBranch, Sparkles, Zap, ChevronRight, Activity } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Brain, Network, Search, Shield, Code, GitBranch, ChevronRight, Activity } from 'lucide-react';
+import { useTelemetryStore } from '../../store/useTelemetryStore';
 
-const AGENTS = [
-  { id: 'orchestrator', name: 'Orchestrator', icon: Network, color: 'sky' },
-  { id: 'intent', name: 'Intent Detection', icon: Search, color: 'violet' },
-  { id: 'requirements', name: 'Requirement Understanding', icon: Brain, color: 'indigo' },
-  { id: 'guardrails', name: 'Guardrails Generator', icon: Shield, color: 'amber' },
-  { id: 'cards', name: 'Agent Card Manager', icon: GitBranch, color: 'emerald' },
-  { id: 'codegen', name: 'Code Generator', icon: Code, color: 'cyan' }
-];
+// Builder pipeline stages, keyed by the real ADK agent (or tool) names reported over /ws/telemetry.
+const STAGES = [
+  { id: 'agent_builder', name: 'Orchestrator', icon: Network },
+  { id: 'intent_detection', name: 'Intent', icon: Search },
+  { id: 'requirement_understanding', name: 'Requirements', icon: Brain },
+  { id: 'guardrails', name: 'Guardrails', icon: Shield, tool: true },
+  { id: 'agent_card_manager', name: 'Agent Card', icon: GitBranch },
+  { id: 'code_generator', name: 'Code Generator', icon: Code },
+] as const;
 
-const THOUGHTS = [
-  'Parsing user requirements...',
-  'Identifying key capabilities...',
-  'Analyzing tool dependencies...',
-  'Designing agent architecture...',
-  'Generating guardrail rules...',
-  'Creating sub-agent hierarchy...',
-  'Compiling agent cards...',
-  'Writing Python ADK code...',
-  'Optimizing tool definitions...',
-  'Validating security constraints...'
-];
+type StageStatus = 'pending' | 'active' | 'done';
 
 interface Props { isActive: boolean; onPhaseChange?: (phase: string) => void; }
 
 export const StreamingAgentDisplay: React.FC<Props> = ({ isActive, onPhaseChange }) => {
-  const [activeIdx, setActiveIdx] = useState(0);
-  const [thoughts, setThoughts] = useState<string[]>([]);
-  const [streamText, setStreamText] = useState('');
-  const [typing, setTyping] = useState(false);
+  const [since, setSince] = useState(0);
+  const agents = useTelemetryStore((s) => s.agents);
+  const toolCalls = useTelemetryStore((s) => s.toolCalls);
+  const traces = useTelemetryStore((s) => s.traces);
+  const logs = useTelemetryStore((s) => s.logs);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!isActive) { setActiveIdx(0); setThoughts([]); setStreamText(''); return; }
-    const interval = setInterval(() => {
-      setActiveIdx(i => { const next = Math.min(i + 1, AGENTS.length - 1); onPhaseChange?.(AGENTS[next].id); return next; });
-    }, 3500);
-    return () => clearInterval(interval);
-  }, [isActive, onPhaseChange]);
-
-  useEffect(() => {
-    if (!isActive) return;
-    const interval = setInterval(() => {
-      const thought = THOUGHTS[Math.floor(Math.random() * THOUGHTS.length)];
-      setThoughts(p => [...p.slice(-8), `[${new Date().toLocaleTimeString()}] ${thought}`]);
-    }, 1200);
-    return () => clearInterval(interval);
+    if (isActive) setSince(Date.now() / 1000 - 1);
   }, [isActive]);
 
-  useEffect(() => { logRef.current && (logRef.current.scrollTop = logRef.current.scrollHeight); }, [thoughts]);
+  const root = agents.agent_builder;
+  const statusOf = (stage: (typeof STAGES)[number]): StageStatus => {
+    if ('tool' in stage) {
+      const calls = (toolCalls.agent_builder ?? []).filter((c) => c.toolName === stage.id && c.startedAt >= since);
+      if (calls.some((c) => c.status === 'running')) return 'active';
+      return calls.length > 0 ? 'done' : 'pending';
+    }
+    const agent = agents[stage.id];
+    if (!agent || agent.lastActiveAt < since) return 'pending';
+    return agent.state === 'idle' ? 'done' : 'active';
+  };
+  const statuses = STAGES.map(statusOf);
+
+  // The deepest busy stage is the one doing the work (the orchestrator waits on its sub-agents).
+  let currentIdx = -1;
+  statuses.forEach((s, i) => { if (s === 'active') currentIdx = i; });
+  const current = currentIdx >= 0 ? STAGES[currentIdx] : STAGES[0];
 
   useEffect(() => {
-    if (!isActive || activeIdx >= AGENTS.length) return;
-    const agent = AGENTS[activeIdx];
-    const text = `${agent.name}: Executing analysis pipeline...`;
-    let i = 0; setStreamText(''); setTyping(true);
-    const interval = setInterval(() => {
-      if (i < text.length) { setStreamText(text.slice(0, i + 1)); i++; }
-      else { setTyping(false); clearInterval(interval); }
-    }, 40);
-    return () => clearInterval(interval);
-  }, [isActive, activeIdx]);
+    if (isActive && currentIdx >= 0) onPhaseChange?.(STAGES[currentIdx].id);
+  }, [isActive, currentIdx, onPhaseChange]);
+
+  const recent = logs.filter((l) => l.timestamp >= since).slice(-8);
+  useEffect(() => { if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }, [recent.length]);
 
   if (!isActive) return null;
+
+  let statusLine = 'Waiting for the orchestrator…';
+  if ('tool' in current && current.tool) {
+    statusLine = 'Running deterministic guardrail checks';
+  } else {
+    const agent = agents[current.id];
+    const lastText = traces[current.id]?.at(-1)?.text.trim().split('\n').at(-1) ?? '';
+    if (agent?.state === 'tool_execution' && agent.stateDetail) statusLine = `Calling ${agent.stateDetail}`;
+    else if (lastText) statusLine = lastText;
+    else if (root) statusLine = 'Thinking…';
+  }
 
   return (
     <div className="space-y-3">
       {/* Agent Pipeline */}
       <div className="flex items-center gap-1 p-2 bg-slate-800/40 rounded-lg overflow-x-auto">
-        {AGENTS.map((a, i) => {
-          const Icon = a.icon;
-          const status = i < activeIdx ? 'done' : i === activeIdx ? 'active' : 'pending';
+        {STAGES.map((stage, i) => {
+          const Icon = stage.icon;
+          const status = statuses[i];
           return (
-            <React.Fragment key={a.id}>
+            <React.Fragment key={stage.id}>
               <div className={`flex items-center gap-1.5 px-2 py-1 rounded-md transition-all ${
-                status === 'active' ? `bg-${a.color}-500/20 border border-${a.color}-500/50` :
+                status === 'active' ? 'bg-sky-500/20 border border-sky-500/50' :
                 status === 'done' ? 'bg-emerald-500/10' : 'bg-white/5'}`}>
-                <Icon className={`w-3 h-3 ${status === 'active' ? `text-${a.color}-400 animate-pulse` : status === 'done' ? 'text-emerald-400' : 'text-slate-600'}`} />
-                <span className={`text-[9px] font-medium ${status === 'active' ? `text-${a.color}-300` : status === 'done' ? 'text-emerald-300' : 'text-slate-600'}`}>{a.name.split(' ')[0]}</span>
+                <Icon className={`w-3 h-3 ${status === 'active' ? 'text-sky-400 animate-pulse' : status === 'done' ? 'text-emerald-400' : 'text-slate-600'}`} />
+                <span className={`text-[9px] font-medium whitespace-nowrap ${status === 'active' ? 'text-sky-300' : status === 'done' ? 'text-emerald-300' : 'text-slate-600'}`}>{stage.name}</span>
               </div>
-              {i < AGENTS.length - 1 && <ChevronRight className={`w-3 h-3 flex-shrink-0 ${i < activeIdx ? 'text-emerald-500' : 'text-slate-700'}`} />}
+              {i < STAGES.length - 1 && <ChevronRight className={`w-3 h-3 flex-shrink-0 ${status === 'done' ? 'text-emerald-500' : 'text-slate-700'}`} />}
             </React.Fragment>
           );
         })}
@@ -89,19 +90,23 @@ export const StreamingAgentDisplay: React.FC<Props> = ({ isActive, onPhaseChange
       {/* Current Agent Status */}
       <div className="flex items-center gap-3 p-3 bg-gradient-to-r from-sky-500/10 to-indigo-500/10 rounded-lg border border-sky-500/20">
         <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-sky-500 to-indigo-600 flex items-center justify-center animate-pulse">
-          {React.createElement(AGENTS[activeIdx]?.icon || Brain, { className: 'w-5 h-5 text-white' })}
+          {React.createElement(current.icon, { className: 'w-5 h-5 text-white' })}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-sky-300">{AGENTS[activeIdx]?.name || 'Processing'}</div>
-          <div className="text-xs text-slate-400 font-mono truncate">{streamText}<span className={`${typing ? 'opacity-100' : 'opacity-0'} transition-opacity`}>▋</span></div>
+          <div className="text-sm font-semibold text-sky-300">{current.name}</div>
+          <div className="text-xs text-slate-400 font-mono truncate">{statusLine}<span className="animate-pulse">▋</span></div>
         </div>
         <Activity className="w-5 h-5 text-sky-400 animate-pulse" />
       </div>
 
-      {/* Thought Stream */}
+      {/* Live event stream (same feed as the Command Center ticker) */}
       <div ref={logRef} className="h-24 p-2 bg-slate-900/50 rounded-lg border border-white/5 overflow-y-auto text-[10px] font-mono space-y-0.5 scrollbar-thin">
-        {thoughts.map((t, i) => <div key={i} className={`text-slate-500 ${i === thoughts.length - 1 ? 'text-sky-400' : ''}`}>{t}</div>)}
-        {thoughts.length === 0 && <div className="text-slate-600 animate-pulse">Initializing agent pipeline...</div>}
+        {recent.map((l, i) => (
+          <div key={l.seq} className={`truncate ${i === recent.length - 1 ? 'text-sky-400' : 'text-slate-500'}`}>
+            [{new Date(l.timestamp * 1000).toLocaleTimeString()}] {l.text}
+          </div>
+        ))}
+        {recent.length === 0 && <div className="text-slate-600 animate-pulse">Waiting for agent telemetry…</div>}
       </div>
     </div>
   );

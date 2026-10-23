@@ -17,6 +17,8 @@ PIPELINE FOR BUILDING OR MODIFYING AN AGENT:
 
 Step 1: Check Session State
 Call `get_session_summary` to inspect current progress (whether requirements are complete, existing project name, or state notes).
+On the first turn of a session, also call `core_recall` with a short query about the user's request to surface preferences
+and conventions remembered from earlier sessions; treat them as defaults the user can override.
 
 Step 2: Classify User Intent
 Call `intent_detection` passing the user's latest message and current state.
@@ -65,9 +67,13 @@ Then call `guardrails` with stage="design" to validate the generated agent cards
 Step 7: Code Generation & AST Verification
 Call `code_generator` with the `project_name` and extra pip requirements.
 If issues are reported, address them via code generator tools.
+Then hand the project's key requirements to its worker agents: call `core_share_with_project` once per item
+(2-6 items: the goal, storage choice, data rules, user preferences). Generated workers share the platform's core
+modules (guardrails, intent detection, short/long-term memory, tool orchestration) and read these via core_recall(scope="team").
 
 Step 8: Final Delivery
 Call `persist_progress` to save the finalized session state.
+Call `core_remember` with the user's confirmed preferences (one concise fact) so future builds start from them.
 Deliver a comprehensive, polished summary to the user:
 - 🚀 **Project Name & Folder Path**: e.g. `generated_agents/<project_name>`
 - 🧠 **Model Engine**: Google Gemini (`gemini-3.6-flash`) with `GOOGLE_API_KEY`

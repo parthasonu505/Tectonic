@@ -21,6 +21,12 @@ from .tools.memory import (
 from .tools.web_search import web_search
 from .tracing import TRACE_CALLBACKS
 
+try:  # shared core-module runtime (tectonic_runtime/); the Builder still runs without it
+    from tectonic_runtime.adk_tools import builder_tools
+except ImportError:  # pragma: no cover - runtime package absent
+    def builder_tools(team: str = "default") -> list:
+        return []
+
 root_agent = LlmAgent(
     name="agent_builder",
     model=MODEL,
@@ -43,6 +49,7 @@ root_agent = LlmAgent(
         read_text_file,
         list_files,
         web_search,
+        *builder_tools(),
     ],
     **TRACE_CALLBACKS,
 )

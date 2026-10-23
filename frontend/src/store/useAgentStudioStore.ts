@@ -11,13 +11,15 @@ import type {
   FileWriteEvent,
   AgentEvent
 } from '../types/agent';
-import { api, DEFAULT_MOCK_SPEC, DEFAULT_DECISION_GROUP } from '../services/api';
+import { api, DEFAULT_MOCK_SPEC } from '../services/api';
 
-export type StudioTab = 'visualizer' | 'sandbox' | 'inspector';
+export type StudioTab = 'command' | 'visualizer' | 'sandbox' | 'inspector';
 
 interface AgentStudioState {
   // Navigation & UI
   activeTab: StudioTab;
+  /** Bumped on every tab request so the workspace reveals the window even if the tab is unchanged. */
+  tabNonce: number;
   setActiveTab: (tab: StudioTab) => void;
   mockMode: boolean;
   setMockMode: (val: boolean) => void;
@@ -43,7 +45,9 @@ interface AgentStudioState {
   createdAgents: CreatedAgent[];
   selectedAgent: CreatedAgent | null;
   setSelectedAgent: (agent: CreatedAgent | null) => void;
-  refreshCreatedAgents: () => Promise<void>;
+  /** Re-reads generated_agents/. Returns agents that appeared since the last refresh and selects the newest of them. */
+  refreshCreatedAgents: () => Promise<CreatedAgent[]>;
+  agentsLoaded: boolean;
 
   // Sessions
   builderSessionId: string | null;
@@ -110,8 +114,9 @@ interface AgentStudioState {
 }
 
 export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
-  activeTab: 'visualizer',
-  setActiveTab: (tab) => set({ activeTab: tab }),
+  activeTab: 'command',
+  tabNonce: 0,
+  setActiveTab: (tab) => set({ activeTab: tab, tabNonce: Date.now() }),
   mockMode: false,
   setMockMode: (val) => {
     api.setMockMode(val);
@@ -180,12 +185,21 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
     }
   },
 
+  agentsLoaded: false,
+
   refreshCreatedAgents: async () => {
-    const agents = await api.fetchCreatedAgents();
-    set({ createdAgents: agents });
-    if (!get().selectedAgent && agents.length > 0) {
+    const { createdAgents: previous, agentsLoaded } = get();
+    const agents = await api.fetchCreatedAgents(); // newest first
+    const known = new Set(previous.map((a) => a.name));
+    const added = agentsLoaded ? agents.filter((a) => !known.has(a.name)) : [];
+    set({ createdAgents: agents, agentsLoaded: true });
+    if (added.length > 0) {
+      // A project was just generated: point the sandbox, inspector and env checks at it.
+      get().setSelectedAgent(added[0]);
+    } else if (!get().selectedAgent && agents.length > 0) {
       get().setSelectedAgent(agents[0]);
     }
+    return added;
   },
 
   // Sessions
@@ -297,6 +311,22 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
         currentDecisionGroup: resp.decisionGroup || state.currentDecisionGroup,
         spec: resp.extractedSpec ? { ...state.spec, ...resp.extractedSpec } : state.spec
       }));
+
+      // The Builder can generate a project from any chat turn (e.g. "Proceed with defaults"),
+      // not only via the decision card, so check for new agents after every reply.
+      const added = await get().refreshCreatedAgents();
+      if (added.length > 0) {
+        const names = added.map((a) => `**${a.name}**`).join(', ');
+        set((state) => ({
+          isAgentReady: true,
+          chatMessages: [...state.chatMessages, {
+            id: `msg-agent-ready-${Date.now()}`,
+            sender: 'assistant' as const,
+            content: `✅ New agent ${names} is ready and selected in the **Live Sandbox** tab.`,
+            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          }]
+        }));
+      }
     } catch (err: any) {
       console.error(err);
       const errMsg: ChatMessage = {
@@ -488,6 +518,7 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
         isAgentReady: true,
         generatedFiles: resp.files,
         activeTab: 'sandbox',
+        tabNonce: Date.now(),
         isStreaming: false,
         pendingFiles: []
       });

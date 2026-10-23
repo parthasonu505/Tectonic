@@ -9,13 +9,7 @@ import {
   ShieldCheck, 
   Target, 
   RefreshCw, 
-  Plus,
-  Sparkles,
-  Key,
-  Cpu,
-  Zap,
-  Brain
-} from 'lucide-react';
+  Plus } from 'lucide-react';
 import { useAgentStudioStore } from '../../store/useAgentStudioStore';
 import { DecisionCardGroup } from './DecisionCardGroup';
 import { MarkdownContent } from './MarkdownContent';
@@ -32,8 +26,6 @@ export const ArchitectChat: React.FC = () => {
     setHudCollapsed,
     startNewBuilderSession,
     builderSessionId,
-    envConfig,
-    setShowEnvModal,
     isGeneratingAgent,
     pendingFiles,
     setCurrentAgentPhase

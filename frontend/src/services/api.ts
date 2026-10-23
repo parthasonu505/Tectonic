@@ -575,7 +575,9 @@ class ApiService {
       const res = await fetch('/api/system/agents');
       if (!res.ok) return [];
       const data = await res.json();
-      return data.agents || [];
+      const agents: CreatedAgent[] = data.agents || [];
+      // Newest first: callers treat agents[0] as the most recently generated project.
+      return agents.sort((a, b) => new Date(b.lastModified).getTime() - new Date(a.lastModified).getTime());
     } catch {
       return [];
     }

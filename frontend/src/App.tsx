@@ -1,39 +1,72 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  Box, 
-  Terminal, 
-  Code, 
-  Settings, 
-  ToggleLeft, 
-  ToggleRight, 
-  Activity, 
-  CheckCircle2, 
-  Sparkles,
+import {
+  Box,
+  Settings,
+  CheckCircle2,
   ChevronDown,
   X,
   Key,
   Plus,
   Layers,
-  AlertCircle,
   Save,
   Check,
   Sun,
-  Moon
+  Moon,
+  RotateCcw,
 } from 'lucide-react';
-import { useAgentStudioStore } from './store/useAgentStudioStore';
-import { ArchitectChat } from './components/chat/ArchitectChat';
-import { AgentVisualizer3D } from './components/visualizer/AgentVisualizer3D';
-import { LiveAgentRunner } from './components/sandbox/LiveAgentRunner';
-import { CodeInspector } from './components/inspector/CodeInspector';
-import { AgentActivitySidebar } from './components/AgentActivitySidebar';
+import { motion } from 'framer-motion';
+import { useAgentStudioStore, type StudioTab } from './store/useAgentStudioStore';
+import { useTelemetryStore } from './store/useTelemetryStore';
+import { Workspace } from './workspace/Workspace';
+import { Dock } from './workspace/Dock';
+import { PRESETS, useWorkspaceStore, type PresetId, type WindowId } from './workspace/useWorkspaceStore';
+
+// Store code still asks for a "tab" (e.g. after a build: 'sandbox'); in the workspace that means "reveal this window".
+const TAB_TO_WINDOW: Record<StudioTab, WindowId> = { command: 'command', visualizer: 'blueprint', sandbox: 'sandbox', inspector: 'inspector' };
+
+function PresetSwitcher() {
+  const preset = useWorkspaceStore((s) => s.preset);
+  const { applyPreset, resetLayout } = useWorkspaceStore.getState();
+  return (
+    <div className="flex items-center gap-1">
+      <div className="relative flex items-center rounded-[9px] bg-white/[0.07] p-[2px] shadow-[inset_0_0_0_0.5px_rgba(255,255,255,0.06)]">
+        {(Object.keys(PRESETS) as PresetId[]).map((id) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => applyPreset(id)}
+            title={PRESETS[id].description}
+            className={`relative z-10 rounded-[7px] px-3.5 py-[3px] text-[12.5px] font-medium transition-colors ${
+              preset === id ? 'text-[var(--studio-text)]' : 'text-[var(--studio-text-muted)] hover:text-[var(--studio-text-secondary)]'
+            }`}
+          >
+            {preset === id && (
+              <motion.span
+                layoutId="preset-pill"
+                className="absolute inset-0 -z-10 rounded-[7px] bg-white/[0.16] shadow-[0_1px_3px_rgba(0,0,0,0.35),inset_0_0.5px_0_rgba(255,255,255,0.2)]"
+                transition={{ type: 'spring', stiffness: 500, damping: 38 }}
+              />
+            )}
+            {PRESETS[id].label}
+          </button>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={resetLayout}
+        className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--studio-text-muted)] transition-colors hover:bg-white/[0.08] hover:text-[var(--studio-text)]"
+        title="Reset this layout"
+      >
+        <RotateCcw className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
 
 export const App: React.FC = () => {
   const { 
-    activeTab, 
-    setActiveTab, 
-    mockMode, 
-    setMockMode, 
-    isAgentReady,
+    activeTab,
+    tabNonce,
     checkEnvConfig,
     envConfig,
     showEnvModal,
@@ -44,9 +77,20 @@ export const App: React.FC = () => {
     setSelectedAgent,
     refreshCreatedAgents,
     startNewBuilderSession,
-    startNewSandboxSession,
-    isChatLoading
   } = useAgentStudioStore();
+  const connectTelemetry = useTelemetryStore((s) => s.connect);
+  const selectTelemetryAgent = useTelemetryStore((s) => s.selectAgent);
+
+  const reveal = useWorkspaceStore((s) => s.reveal);
+
+  const focusAgent = (id: string) => {
+    selectTelemetryAgent(id);
+    reveal('command');
+  };
+
+  useEffect(() => {
+    if (tabNonce) reveal(TAB_TO_WINDOW[activeTab]);
+  }, [tabNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const [apiKeyInput, setApiKeyInput] = useState('');
   const [modelInput, setModelInput] = useState('gemini-3.6-flash');
@@ -55,8 +99,12 @@ export const App: React.FC = () => {
   const [agentDropdownOpen, setAgentDropdownOpen] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(() => {
     // Check localStorage or default to dark
-    const saved = localStorage.getItem('theme');
-    return saved ? saved === 'dark' : true;
+    try {
+      const saved = localStorage.getItem('theme');
+      return saved ? saved === 'dark' : true;
+    } catch {
+      return true;
+    }
   });
 
   // Apply theme to document
@@ -66,7 +114,7 @@ export const App: React.FC = () => {
     } else {
       document.documentElement.classList.add('light');
     }
-    localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+    try { localStorage.setItem('theme', isDarkMode ? 'dark' : 'light'); } catch { /* not persisted */ }
   }, [isDarkMode]);
 
   const toggleTheme = () => {
@@ -78,6 +126,7 @@ export const App: React.FC = () => {
     checkEnvConfig();
     refreshCreatedAgents();
     startNewBuilderSession();
+    connectTelemetry();
   }, []);
 
   // Sync modal inputs when envConfig is loaded
@@ -108,33 +157,29 @@ export const App: React.FC = () => {
 
   const handleStartNewAgent = () => {
     startNewBuilderSession();
-    setActiveTab('visualizer');
+    reveal('chat');
   };
 
   return (
-    <div className={`flex flex-col h-screen w-screen overflow-hidden font-sans transition-colors duration-300 ${isDarkMode ? 'bg-studio-bg text-slate-100' : 'bg-studio-bg text-slate-800'}`}>
+    <div className="flex h-screen w-screen flex-col overflow-hidden font-sans text-[var(--studio-text)] transition-colors duration-300">
       {/* Top Navbar */}
-      <header className="h-12 border-b border-studio-border bg-studio-surface/80 backdrop-blur-xl px-4 flex items-center justify-between z-30 shrink-0">
+      <header className="menu-bar z-30 flex h-11 shrink-0 items-center justify-between gap-3 px-4">
         <div className="flex items-center gap-4">
           {/* Logo */}
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-sky-500 via-indigo-500 to-purple-600 flex items-center justify-center shadow-md shadow-sky-500/20">
-              <Box className="w-4 h-4 text-white" />
+            <div className="flex h-6 w-6 items-center justify-center rounded-[7px] bg-gradient-to-br from-sky-300 via-sky-400 to-indigo-500 shadow-[0_2px_8px_-2px_rgba(45,212,255,0.6),inset_0_1px_0_rgba(255,255,255,0.4)]">
+              <Box className="h-3.5 w-3.5 text-white" strokeWidth={2.4} />
             </div>
-            <div>
-              <span className="text-xs font-bold tracking-wider uppercase bg-gradient-to-r from-sky-400 via-indigo-300 to-purple-400 bg-clip-text text-transparent">
-                ADK 3D Agent Studio
-              </span>
-              <span className="text-[10px] text-slate-400 font-mono ml-2 hidden sm:inline-block">
-                v2.0 • Meta-Agent & Sandbox
-              </span>
+            <div className="flex items-baseline gap-2">
+              <span className="text-[14px] font-semibold tracking-tight text-[var(--studio-text)]">Tectonic</span>
+              <span className="hidden text-[12px] font-medium text-[var(--studio-text-muted)] sm:inline">Agent Studio</span>
             </div>
           </div>
 
           {/* Create Another Agent Button */}
           <button
             onClick={handleStartNewAgent}
-            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-sky-500/20 hover:bg-sky-500/30 text-sky-300 border border-sky-500/40 text-xs font-semibold transition-all shadow-sm"
+            className="flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors bg-sky-400 text-[#05222E] shadow-[0_2px_10px_-3px_rgba(45,212,255,0.7)] hover:bg-sky-300"
             title="Start fresh session to create another agent"
           >
             <Plus className="w-3.5 h-3.5" />
@@ -145,7 +190,7 @@ export const App: React.FC = () => {
           <div className="relative">
             <button
               onClick={() => setAgentDropdownOpen(!agentDropdownOpen)}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/10 text-xs font-mono transition-colors"
+              className="flex items-center gap-1.5 rounded-full px-3 py-1 text-[12px] font-medium transition-colors bg-white/[0.08] text-[var(--studio-text-secondary)] shadow-[inset_0_0_0_0.5px_rgba(255,255,255,0.08)] hover:bg-white/[0.13] hover:text-[var(--studio-text)]"
               title="Switch active agent in sandbox"
             >
               <Layers className="w-3.5 h-3.5 text-indigo-400" />
@@ -197,63 +242,20 @@ export const App: React.FC = () => {
           </div>
         </div>
 
-        {/* Center: Viewport Tabs */}
-        <div className="flex items-center gap-1 bg-studio-card/80 border border-white/5 p-1 rounded-xl shadow-inner">
-          <button
-            onClick={() => setActiveTab('visualizer')}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'visualizer'
-                ? 'bg-sky-500 text-white shadow-md shadow-sky-500/20'
-                : 'text-slate-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Box className="w-3.5 h-3.5" />
-            <span>3D Visualizer</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('sandbox')}
-            className={`relative flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'sandbox'
-                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20'
-                : 'text-slate-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Terminal className="w-3.5 h-3.5" />
-            <span>Live Sandbox</span>
-            {isAgentReady && (
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping absolute -top-0.5 -right-0.5" />
-            )}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('inspector')}
-            className={`flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-medium transition-all ${
-              activeTab === 'inspector'
-                ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20'
-                : 'text-slate-400 hover:text-white hover:bg-white/5'
-            }`}
-          >
-            <Code className="w-3.5 h-3.5" />
-            <span>ADK Code</span>
-          </button>
-        </div>
+        {/* Center: workspace layout presets */}
+        <PresetSwitcher />
 
         {/* Right: Agent Builder Status & Config */}
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs font-mono">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Agent Builder: Active</span>
+          <div className="hidden items-center gap-1.5 rounded-full bg-white/[0.06] px-3 py-1 text-[12px] font-medium text-[var(--studio-text-secondary)] lg:flex">
+            <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
+            <span>Builder active</span>
           </div>
 
           {/* Theme Toggle Button */}
           <button
             onClick={toggleTheme}
-            className={`p-1.5 rounded-lg border transition-all duration-300 ${
-              isDarkMode 
-                ? 'bg-white/5 hover:bg-white/10 text-amber-400 hover:text-amber-300 border-white/10' 
-                : 'bg-amber-50 hover:bg-amber-100 text-amber-600 hover:text-amber-700 border-amber-200'
-            }`}
+            className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--studio-text-secondary)] transition-colors hover:bg-white/[0.1] hover:text-[var(--studio-text)]"
             title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
           >
             {isDarkMode ? (
@@ -265,7 +267,7 @@ export const App: React.FC = () => {
 
           <button
             onClick={() => setShowEnvModal(true)}
-            className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white border border-white/10 transition-colors"
+            className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--studio-text-secondary)] transition-colors hover:bg-white/[0.1] hover:text-[var(--studio-text)]"
             title="System & Google Gemini Environment Settings"
           >
             <Settings className="w-4 h-4" />
@@ -273,23 +275,9 @@ export const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Main Studio Workspace (Multi-Pane Layout) */}
-      <main className="flex-1 flex overflow-hidden">
-        {/* Left Pane: Smart Interactive Architect Chat */}
-        <div className="w-[38%] min-w-[340px] max-w-[520px] h-full flex flex-col shrink-0">
-          <ArchitectChat />
-        </div>
-
-        {/* Center Pane: Dual-Mode Viewport */}
-        <div className="flex-1 h-full relative overflow-hidden bg-studio-bg">
-          {activeTab === 'visualizer' && <AgentVisualizer3D />}
-          {activeTab === 'sandbox' && <LiveAgentRunner />}
-          {activeTab === 'inspector' && <CodeInspector />}
-        </div>
-
-        {/* Right Pane: Agent Activity Sidebar */}
-        <AgentActivitySidebar isProcessing={isChatLoading} />
-      </main>
+      {/* Draggable, resizable window workspace */}
+      <Workspace onSelectAgent={focusAgent} />
+      <Dock onSelectAgent={focusAgent} />
 
       {/* Google Gemini API Key & Environment Config Modal (Zero LLM Interaction) */}
       {showEnvModal && (

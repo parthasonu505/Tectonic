@@ -1,91 +1,81 @@
-import React, { useEffect, useState } from 'react';
-import { Brain, Shield, Code, Search, Network, GitBranch, CheckCircle2, Loader2, Activity, FileCode, Zap } from 'lucide-react';
+import React from 'react';
+import { FileCode, Zap } from 'lucide-react';
 import { useAgentStudioStore } from '../store/useAgentStudioStore';
+import { useTelemetryStore } from '../store/useTelemetryStore';
+import { ROLE_STYLES, STATE_STYLES, agentRole, formatCount } from './command/agentStateStyles';
 
-interface AgentStatus {
-  id: string;
-  name: string;
-  status: 'idle' | 'active' | 'complete';
-  lastAction?: string;
-}
+/** Live roster of every agent reported by /ws/telemetry, ordered as the tree (depth-first). */
+export const AgentActivitySidebar: React.FC<{ onSelectAgent: (id: string) => void }> = ({ onSelectAgent }) => {
+  const { pendingFiles, isGeneratingAgent } = useAgentStudioStore();
+  const agents = useTelemetryStore((s) => s.agents);
+  const order = useTelemetryStore((s) => s.agentOrder);
+  const selectedId = useTelemetryStore((s) => s.selectedAgentId);
 
-const AGENTS_CONFIG = [
-  { id: 'orchestrator', name: 'Orchestrator', icon: Network },
-  { id: 'intent', name: 'Intent Detection', icon: Search },
-  { id: 'requirements', name: 'Requirements', icon: Brain },
-  { id: 'guardrails', name: 'Guardrails', icon: Shield },
-  { id: 'cards', name: 'Agent Cards', icon: GitBranch },
-  { id: 'codegen', name: 'Code Generator', icon: Code },
-];
-
-export const AgentActivitySidebar: React.FC<{ isProcessing: boolean }> = ({ isProcessing }) => {
-  const { currentAgentPhase, pendingFiles, isGeneratingAgent } = useAgentStudioStore();
-  const [agents, setAgents] = useState<AgentStatus[]>(
-    AGENTS_CONFIG.map(a => ({ id: a.id, name: a.name, status: 'idle' }))
-  );
-
-  useEffect(() => {
-    if (!isProcessing) {
-      setAgents(AGENTS_CONFIG.map(a => ({ id: a.id, name: a.name, status: 'idle' })));
-      return;
-    }
-    const phaseIdx = AGENTS_CONFIG.findIndex(a => a.id === currentAgentPhase);
-    setAgents(AGENTS_CONFIG.map((a, i) => ({
-      id: a.id,
-      name: a.name,
-      status: i < phaseIdx ? 'complete' : i === phaseIdx ? 'active' : 'idle',
-      lastAction: i === phaseIdx ? 'Processing...' : i < phaseIdx ? 'Done' : undefined
-    })));
-  }, [isProcessing, currentAgentPhase]);
+  const rows: { id: string; depth: number }[] = [];
+  const visit = (id: string, depth: number) => {
+    rows.push({ id, depth });
+    order.filter((c) => agents[c]?.parentId === id).forEach((c) => visit(c, depth + 1));
+  };
+  order.filter((id) => !agents[id]?.parentId || !agents[agents[id].parentId!]).forEach((id) => visit(id, 0));
+  const busy = order.some((id) => agents[id]?.state !== 'idle');
 
   return (
-    <div className="w-52 shrink-0 border-l border-studio-border bg-studio-surface/30 p-3 hidden xl:block">
-      <div className="flex items-center gap-2 mb-3 pb-2 border-b border-white/5">
-        <Activity className="w-4 h-4 text-sky-400" />
-        <span className="text-xs font-semibold text-slate-300">Agent Pipeline</span>
-        {isProcessing && <Zap className="w-3 h-3 text-amber-400 animate-pulse ml-auto" />}
-      </div>
-      
-      <div className="space-y-1.5">
-        {agents.map((agent, idx) => {
-          const config = AGENTS_CONFIG[idx];
-          const Icon = config.icon;
+    <div className="flex h-full flex-col p-2.5">
+      {busy && (
+        <div className="mb-2 flex items-center gap-1.5 px-1 text-[10.5px] text-amber-300">
+          <Zap className="h-3 w-3 animate-pulse" /> Agents working
+        </div>
+      )}
+
+      <div className="space-y-1 overflow-y-auto min-h-0 flex-1">
+        {rows.length === 0 && (
+          <p className="text-[10.5px] leading-relaxed text-[var(--studio-text-muted)]">
+            Agents appear here as they spawn during a run.
+          </p>
+        )}
+        {rows.map(({ id, depth }) => {
+          const agent = agents[id];
+          const style = STATE_STYLES[agent.state];
           return (
-            <div key={agent.id} className={`flex items-center gap-2 p-2 rounded-lg border transition-all duration-300 ${
-              agent.status === 'active' ? 'bg-sky-500/15 border-sky-500/40 shadow-lg shadow-sky-500/10' :
-              agent.status === 'complete' ? 'bg-emerald-500/5 border-emerald-500/20' : 'bg-white/5 border-white/5'
-            }`}>
-              <div className={`w-7 h-7 rounded-lg flex items-center justify-center transition-all ${
-                agent.status === 'active' ? 'bg-gradient-to-br from-sky-500 to-indigo-600 text-white shadow-md' :
-                agent.status === 'complete' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-white/10 text-slate-500'
-              }`}>
-                {agent.status === 'active' ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> :
-                 agent.status === 'complete' ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Icon className="w-3.5 h-3.5" />}
+            <button
+              key={id}
+              type="button"
+              onClick={() => onSelectAgent(id)}
+              style={{ paddingLeft: 8 + depth * 10 }}
+              className={`w-full flex items-center gap-2 pr-2 py-1.5 rounded-md border text-left transition-colors ${
+                selectedId === id ? 'border-sky-500/40 bg-sky-500/10' : 'border-transparent hover:bg-white/5'
+              }`}
+            >
+              <span
+                className={`h-2 w-2 shrink-0 rounded-full ${style.pulse ? 'animate-pulse' : ''}`}
+                style={{ background: style.color, boxShadow: style.pulse ? `0 0 6px ${style.color}` : undefined }}
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="truncate font-mono text-[11px] text-[var(--studio-text)]">{agent.role}</span>
+                  <span className={`shrink-0 rounded border px-1 font-mono text-[8px] uppercase tracking-wider ${ROLE_STYLES[agentRole(id)].chip}`}>
+                    {ROLE_STYLES[agentRole(id)].label}
+                  </span>
+                </div>
+                <div className={`truncate font-mono text-[9px] ${style.text}`}>
+                  {style.label}
+                  {agent.tokens.total > 0 && <span className="text-[var(--studio-text-muted)]"> · {formatCount(agent.tokens.total)} tok</span>}
+                </div>
               </div>
-              <div className="flex-1 min-w-0">
-                <div className={`text-[10px] font-semibold truncate ${
-                  agent.status === 'active' ? 'text-sky-300' : agent.status === 'complete' ? 'text-emerald-300' : 'text-slate-500'
-                }`}>{agent.name}</div>
-                {agent.status === 'active' && (
-                  <div className="h-1 mt-1 bg-slate-700 rounded-full overflow-hidden">
-                    <div className="h-full bg-gradient-to-r from-sky-500 to-indigo-500 animate-pulse" style={{width: '60%'}} />
-                  </div>
-                )}
-              </div>
-            </div>
+            </button>
           );
         })}
       </div>
 
       {/* File Generation Progress */}
       {isGeneratingAgent && pendingFiles.length > 0 && (
-        <div className="mt-4 pt-3 border-t border-white/5">
+        <div className="mt-4 pt-3 border-t border-studio-border">
           <div className="flex items-center gap-2 mb-2">
             <FileCode className="w-3.5 h-3.5 text-emerald-400" />
             <span className="text-[10px] font-semibold text-emerald-300">Generating Files</span>
           </div>
           <div className="space-y-1 max-h-32 overflow-y-auto scrollbar-thin">
-            {pendingFiles.map((f, i) => (
+            {pendingFiles.map((f) => (
               <div key={f.path} className="text-[9px] font-mono text-slate-500 truncate flex items-center gap-1">
                 <span className="w-1 h-1 rounded-full bg-emerald-500" />
                 {f.path.split('/').pop()}

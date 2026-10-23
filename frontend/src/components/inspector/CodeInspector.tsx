@@ -5,11 +5,8 @@ import {
   Check, 
   Save, 
   Cpu, 
-  Wrench, 
   ShieldCheck, 
-  Layers,
   ChevronDown,
-  Sparkles,
   Edit3,
   Eye,
   CheckCircle2
@@ -24,7 +21,6 @@ export const CodeInspector: React.FC = () => {
     currentAgentFiles, 
     loadAgentFiles,
     saveAgentFile,
-    spec 
   } = useAgentStudioStore();
 
   const fileKeys = Object.keys(currentAgentFiles);
