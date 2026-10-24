@@ -10,6 +10,8 @@ from typing import Optional
 from google.adk.tools import ToolContext
 
 from ...shared_libraries.constants import (
+    STATE_VERIFICATION,
+    STATE_ARCH_SPEC,
     OUTPUT_DIR,
     STATE_AGENT_CARDS,
     STATE_GENERATED_FILES,
@@ -88,23 +90,58 @@ def render_instruction(template, state_keys=()):
     return provider
 '''
 
-_GEN_CORE_MODULES = '''"""Shared Tectonic core modules for this project's agents.
+_GEN_CORE_MODULES = '''"""Shared Tectonic platform modules for this project's agents.
 
-Inside the Tectonic agent server, every agent gets the platform's shared modules (guardrails,
-intent detection, short/long-term memory, tool orchestration) as ADK tools, with activity
-streamed to the Command Center. Run standalone (plain `adk run`), the import fails and the
-agents simply work without them.
+Inside the Tectonic agent server every agent gets the platform as ADK tools (guardrails, intent,
+short/long-term memory, tool orchestration, Agentic RAG knowledge, FinOps spend, PromptOps feedback,
+audit trail) and its instruction is served by PromptOps as '<team>.<agent>' (versioned, A/B-testable).
+Run standalone (plain `adk run`), the import fails and the agents work with their static prompts.
 """
 
 TEAM = "{project}"
+# Platform modules enabled in the approved Agent Architecture Specification (None: all modules).
+ENABLED_MODULES = {enabled_modules}
+
+
+def _fill(text, context, state_keys):
+    for key in state_keys:
+        value = context.state.get(key)
+        text = text.replace("{" + key + "}", "" if value is None else (value if isinstance(value, str) else str(value)))
+    return text
+
 
 try:
     from tectonic_runtime.adk_tools import CORE_MODULE_INSTRUCTIONS, worker_tools
 
-    CORE_MODULE_TOOLS = worker_tools(team=TEAM)
+    CORE_MODULE_TOOLS = worker_tools(team=TEAM, modules=ENABLED_MODULES)
+
+    def managed_instruction(agent_name, template, state_keys=()):
+        """Instruction provider served by PromptOps ('<team>.<agent>'), falling back to the template."""
+
+        async def provider(context):
+            text = template
+            try:
+                from tectonic_runtime import get_runtime
+                from tectonic_runtime.identity import session_id_of
+
+                text, _ = await get_runtime().module("promptops").resolve_template(
+                    f"{TEAM}.{agent_name}", session_id_of(context), template
+                )
+            except Exception:
+                pass
+            return _fill(text, context, state_keys)
+
+        return provider
+
 except ImportError:
     CORE_MODULE_TOOLS = []
     CORE_MODULE_INSTRUCTIONS = ""
+
+    def managed_instruction(agent_name, template, state_keys=()):
+        def provider(context):
+            return _fill(template, context, state_keys)
+
+        return provider
 '''
 
 _GEN_ENV = """# Configure Google Gemini API Key
@@ -173,7 +210,7 @@ def _agent_py(card: dict, cards: dict, is_root: bool) -> str:
     imports.append(f"from google.adk.agents import {classes[kind]}")
     if kind == "llm":
         imports.append(f"from {prefix}shared_libraries.constants import MODEL, render_instruction" if is_root else "from ...shared_libraries.constants import MODEL, render_instruction")
-        imports.append(f"from {prefix}shared_libraries.core_modules import CORE_MODULE_INSTRUCTIONS, CORE_MODULE_TOOLS")
+        imports.append(f"from {prefix}shared_libraries.core_modules import CORE_MODULE_INSTRUCTIONS, CORE_MODULE_TOOLS, managed_instruction")
         imports.append("from . import prompt" if not is_root else "from . import prompt")
     tool_lines, tool_names = _tool_import_lines(card, prefix)
     if kind == "llm":
@@ -188,7 +225,7 @@ def _agent_py(card: dict, cards: dict, is_root: bool) -> str:
     body = [f"{var} = {classes[kind]}(", f'    name="{name}",', f"    description={description},"]
     if kind == "llm":
         body.append("    model=MODEL,")
-        body.append("    instruction=render_instruction(prompt.INSTRUCTION + CORE_MODULE_INSTRUCTIONS, prompt.STATE_READS),")
+        body.append(f'    instruction=managed_instruction("{name}", prompt.INSTRUCTION + CORE_MODULE_INSTRUCTIONS, prompt.STATE_READS),')
         body.append(f"    tools=[{''.join(n + ', ' for n in tool_names)}*CORE_MODULE_TOOLS],")
         if card.get("output_key"):
             body.append(f"    output_key={json.dumps(card['output_key'])},")
@@ -311,7 +348,10 @@ GEMINI_MODEL={configured_model}
     emit(f"{project}/__init__.py", '"""Generated Google ADK agent package."""\n\nfrom . import agent\n')
     emit(f"{project}/shared_libraries/__init__.py", "")
     emit(f"{project}/shared_libraries/constants.py", _GEN_CONSTANTS)
-    emit(f"{project}/shared_libraries/core_modules.py", _GEN_CORE_MODULES.replace("{project}", project))
+    arch = tool_context.state.get(STATE_ARCH_SPEC) or {}
+    enabled = arch.get("enabled_modules") if isinstance(arch, dict) and arch.get("project") == project else None
+    emit(f"{project}/shared_libraries/core_modules.py",
+         _GEN_CORE_MODULES.replace("{project}", project).replace("{enabled_modules}", repr(sorted(enabled)) if enabled else "None"))
     emit(f"{project}/tools/__init__.py", '"""Tool implementations for the generated agents."""\n')
     emit(f"{project}/sub_agents/__init__.py", "")
     root = roots[0]
@@ -510,5 +550,6 @@ def verify_generated_project(project_name: str, tool_context: ToolContext) -> di
             if all(isinstance(n, ast.Pass) for n in body) or not body:
                 problems.append(f"{rel}: function '{tool['name']}' has no real implementation.")
 
+    tool_context.state[STATE_VERIFICATION] = {"project": project, "ok": not problems, "problems": problems[:20]}
     return {"status": "success", "ok": not problems, "problems": problems, "files_checked": sorted(parsed)}
 

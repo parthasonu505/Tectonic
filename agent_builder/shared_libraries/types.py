@@ -174,6 +174,80 @@ class SubAgentSpec(BaseModel):
         return slugify_identifier(value)
 
 
+# --- Structured decisions (rendered as select cards in the Studio UI) --------------------------
+_OPTION_LINE_RE = re.compile(r"^\s*(?:[-*•]\s*)?(?:\[\s*[xX ]?\s*\]\s*)?\(?([A-Ha-h])[\).:]\s*(.+)$")
+
+
+class DecisionOption(BaseModel):
+    id: str = Field(default="", description='Option letter: "A", "B", "C" ... (assigned automatically when omitted)')
+    label: str = Field(description="Short option name, e.g. 'SQLite database'.")
+    description: str = Field(default="", description="One line on the trade-off / why choose it.")
+    recommended: bool = False
+    module_id: str = Field(default="", description="Platform module id when this option is a pre-built module (set by the Builder).")
+
+
+class DecisionQuestion(BaseModel):
+    id: str = Field(description="Stable snake_case key, e.g. 'storage', 'agent_structure', 'knowledge_sources'.")
+    title: str = Field(description="Question shown to the user, e.g. 'Where should records be stored?'")
+    why: str = Field(default="", description="One sentence explaining why this decision matters for the build.")
+    category: str = Field(default="general", description="data | architecture | integrations | safety | interaction | platform | general")
+    multi_select: bool = Field(default=False, description="True when several options may be combined (e.g. output channels).")
+    allow_custom: bool = True
+    options: list[DecisionOption] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce(cls, val: Any) -> Any:
+        if isinstance(val, str):
+            return parse_markdown_decision(val, 0) or {"id": "question", "title": val, "options": []}
+        return val
+
+    @model_validator(mode="after")
+    def _normalise(self) -> "DecisionQuestion":
+        self.id = slugify_identifier(self.id or self.title, default="decision")
+        cleaned: list[DecisionOption] = []
+        for opt in self.options:
+            label = opt.label.strip()
+            if not label or label.lower().startswith("other"):
+                continue  # "Other" is provided by allow_custom
+            oid = chr(65 + len(cleaned))  # sequential letters; the UI answers with exactly these ids
+            label = re.sub(r"\s*\(recommended\)\s*", " ", label, flags=re.I).strip()
+            cleaned.append(DecisionOption(id=oid, label=label, description=opt.description.strip(), module_id=opt.module_id,
+                                          recommended=opt.recommended or "(recommended)" in opt.label.lower()))
+        # Checklists (multi-select, e.g. pre-built modules) may be long and pre-select several options;
+        # single choices keep 2-6 options with exactly one recommendation.
+        self.options = cleaned[: 14 if self.multi_select else 6]
+        if self.options and not self.multi_select and sum(o.recommended for o in self.options) != 1:
+            first = next((o for o in self.options if o.recommended), self.options[0])
+            for o in self.options:
+                o.recommended = o is first
+        if self.options and self.multi_select and not any(o.recommended for o in self.options):
+            self.options[0].recommended = True
+        return self
+
+
+def parse_markdown_decision(block: str, index: int) -> dict | None:
+    """Legacy: turn a markdown checkbox question ("Title:\n- [ ] A) X (Recommended) — why") into a decision."""
+    lines = [line.strip() for line in str(block).splitlines() if line.strip()]
+    if not lines:
+        return None
+    title = re.sub(r"^#+\s*|^\d+[.)]\s*|[:?]+$", "", lines[0]).strip() or f"Decision {index + 1}"
+    options = []
+    for line in lines[1:]:
+        m = _OPTION_LINE_RE.match(line)
+        if not m:
+            continue
+        rest = m.group(2).replace("**", "").strip()
+        label, _, desc = re.split(r"\s+[—–-]\s+", rest, maxsplit=1)[0], None, ""
+        parts = re.split(r"\s+[—–-]\s+", rest, maxsplit=1)
+        if len(parts) == 2:
+            label, desc = parts
+        options.append({"id": m.group(1).upper(), "label": label, "description": desc, "recommended": "recommended" in rest.lower()})
+    if len(options) < 2:
+        return None
+    return {"id": slugify_identifier(title, default=f"decision_{index + 1}"), "title": title, "options": options}
+
+
 class Requirements(BaseModel):
     project_name: str = "generated_agent"
     goal: str = ""
@@ -194,6 +268,10 @@ class Requirements(BaseModel):
     questions_for_user: list[str] = Field(
         default_factory=list,
         description="Targeted questions to ask the user right now to gather and clarify missing requirements. Empty only when all requirements are fully known.",
+    )
+    decisions: list[DecisionQuestion] = Field(
+        default_factory=list,
+        description="Structured select-style questions for decisions still open this round (2-5). Empty when complete.",
     )
     is_complete: bool = False
     collected_details_summary: str = ""
@@ -222,7 +300,18 @@ class Requirements(BaseModel):
             data["architecture"] = "coordinator"
         if isinstance(data.get("tools"), dict):
             data["tools"] = [{"name": k, **(v if isinstance(v, dict) else {})} for k, v in data["tools"].items()]
+        # Legacy markdown questions → structured decisions, so the UI always gets select cards.
+        if not data.get("decisions") and data.get("questions_for_user"):
+            parsed = [parse_markdown_decision(q, i) for i, q in enumerate(data["questions_for_user"]) if isinstance(q, str)]
+            data["decisions"] = [d for d in parsed if d]
         return data
+
+    @model_validator(mode="after")
+    def _consistency(self) -> "Requirements":
+        self.decisions = [d for d in self.decisions if len(d.options) >= 2]
+        if self.decisions:
+            self.is_complete = False
+        return self
 
     @field_validator("project_name", mode="before")
     @classmethod
@@ -301,9 +390,18 @@ def fix_requirements_json(raw_text: str) -> str:
             project_name="generated_agent",
             goal="Manage and automate requested agent workflows.",
             collected_details_summary=str(raw_text)[:500],
-            questions_for_user=[
-                "Storage & Database:\n- [ ] A) SQLite Database (Recommended) — Structured, relational local storage\n- [ ] B) Local JSON Files — Simple file-based storage\n- [ ] C) Other: [Write your custom database or format]",
-                "Key Features & Workflows:\n- [ ] A) Complete Standard Workflow (Recommended) — Includes core operations, data validation, and summaries\n- [ ] B) Lightweight / Minimal — Basic logging only\n- [ ] C) Other: [Specify custom features or workflow]",
+            decisions=[
+                DecisionQuestion(id="storage", title="Where should the agent keep its records?", category="data",
+                                 why="Determines persistence, querying and backup of the agent's data.", options=[
+                                     DecisionOption(id="A", label="SQLite database", description="Structured, queryable, local", recommended=True),
+                                     DecisionOption(id="B", label="Local JSON files", description="Simple and human-readable"),
+                                     DecisionOption(id="C", label="In-memory only", description="Fast; resets every session"),
+                                 ]),
+                DecisionQuestion(id="scope", title="How complete should the first version be?", category="general",
+                                 why="Sets how many workflows and tools are generated now.", options=[
+                                     DecisionOption(id="A", label="Complete standard workflow", description="Core operations, validation and summaries", recommended=True),
+                                     DecisionOption(id="B", label="Minimal starter", description="Smallest working agent to extend later"),
+                                 ]),
             ],
         )
         return obj.model_dump_json()

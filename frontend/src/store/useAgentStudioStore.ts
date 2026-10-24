@@ -2,8 +2,9 @@ import { create } from 'zustand';
 import type { 
   AgentTool, 
   ExtractedAgentSpec, 
-  DecisionGroup, 
-  ChatMessage, 
+  DecisionGroup,
+  BuilderJourney,
+  ChatMessage,
   SandboxChatMessage,
   CreatedAgent,
   EnvConfig,
@@ -62,7 +63,8 @@ interface AgentStudioState {
   // Architect Chat State (No Dummy replies)
   chatMessages: ChatMessage[];
   isChatLoading: boolean;
-  sendArchitectMessage: (content: string) => Promise<void>;
+  /** `display` is what the chat shows (e.g. human-readable choices without the DECISIONS_JSON payload). */
+  sendArchitectMessage: (content: string, display?: string) => Promise<void>;
 
   // Extracted Spec & Live Architecture Preview
   spec: ExtractedAgentSpec;
@@ -70,6 +72,8 @@ interface AgentStudioState {
 
   // Interactive Decisions Group
   currentDecisionGroup: DecisionGroup | null;
+  /** Guided interview / build progress from the Builder's `build_phase` state. */
+  builderJourney: BuilderJourney | null;
   updateDecisionOption: (questionId: string, optionId: string) => void;
   toggleCustomDecision: (questionId: string, isCustom: boolean) => void;
   setCustomDecisionValue: (questionId: string, val: string) => void;
@@ -221,6 +225,7 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
           }
         ],
         currentDecisionGroup: null,
+        builderJourney: null,
         spec: JSON.parse(JSON.stringify(DEFAULT_MOCK_SPEC)),
         isChatLoading: false
       });
@@ -258,6 +263,7 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
   updateSpec: (partial) => set((state) => ({ spec: { ...state.spec, ...partial } })),
 
   currentDecisionGroup: null,
+  builderJourney: null,
 
   chatMessages: [
     {
@@ -270,7 +276,7 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
   isChatLoading: false,
 
   // Real LLM Message Transmission - No Dummy Replies
-  sendArchitectMessage: async (content: string) => {
+  sendArchitectMessage: async (content: string, display?: string) => {
     if (!content.trim()) return;
 
     let sid = get().builderSessionId;
@@ -282,7 +288,7 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       sender: 'user',
-      content,
+      content: display ?? content,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     };
 
@@ -301,7 +307,8 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
         sender: 'assistant',
         content: resp.reply,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        decisionGroup: resp.decisionGroup
+        decisionGroup: resp.decisionGroup,
+        architectureSpec: resp.architectureSpec
       };
 
       set((state) => ({
@@ -309,6 +316,7 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
         isChatLoading: false,
         isStreaming: false,
         currentDecisionGroup: resp.decisionGroup || state.currentDecisionGroup,
+        builderJourney: resp.journey ?? state.builderJourney,
         spec: resp.extractedSpec ? { ...state.spec, ...resp.extractedSpec } : state.spec
       }));
 
@@ -348,7 +356,12 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
       if (!state.currentDecisionGroup) return state;
       const updatedQuestions = state.currentDecisionGroup.questions.map((q) => {
         if (q.id === questionId) {
-          return { ...q, selectedOption: optionId, isCustom: false };
+          if (q.multiSelect) {
+            const current = q.selectedOptions ?? [];
+            const next = current.includes(optionId) ? current.filter((id) => id !== optionId) : [...current, optionId];
+            return { ...q, selectedOptions: next, selectedOption: next[0] ?? '', isCustom: false };
+          }
+          return { ...q, selectedOption: optionId, selectedOptions: [optionId], isCustom: false };
         }
         return q;
       });
@@ -429,9 +442,11 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
       if (!state.currentDecisionGroup) return state;
       const updatedQuestions = state.currentDecisionGroup.questions.map((q) => {
         const recommended = q.options.find((opt) => opt.isRecommended) || q.options[0];
+        const allRecommended = q.options.filter((opt) => opt.isRecommended).map((opt) => opt.id);
         return {
           ...q,
           selectedOption: recommended ? recommended.id : q.selectedOption,
+          selectedOptions: q.multiSelect && allRecommended.length ? allRecommended : recommended ? [recommended.id] : q.selectedOptions,
           isCustom: false,
           customValue: ''
         };

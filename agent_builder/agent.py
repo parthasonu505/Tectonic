@@ -10,6 +10,14 @@ from .sub_agents.code_generator.agent import code_generator_agent
 from .sub_agents.guardrails.agent import guardrails
 from .sub_agents.intent_detection.agent import intent_detection_agent
 from .sub_agents.requirement_understanding.agent import requirement_understanding_agent
+from .tools.build_pipeline import (
+    apply_decisions,
+    build_status,
+    compile_specification,
+    design_research,
+    finalize_build,
+    present_decisions,
+)
 from .tools.file_manager import list_files, read_text_file
 from .tools.memory import (
     get_session_summary,
@@ -53,6 +61,12 @@ root_agent = LlmAgent(
     ),
     instruction=managed_instruction,
     tools=[
+        build_status,
+        present_decisions,
+        apply_decisions,
+        design_research,
+        compile_specification,
+        finalize_build,
         AgentTool(agent=intent_detection_agent),
         AgentTool(agent=requirement_understanding_agent),
         guardrails,

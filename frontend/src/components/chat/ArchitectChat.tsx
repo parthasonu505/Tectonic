@@ -12,6 +12,8 @@ import {
   Plus } from 'lucide-react';
 import { useAgentStudioStore } from '../../store/useAgentStudioStore';
 import { DecisionCardGroup } from './DecisionCardGroup';
+import { JourneyStepper } from './JourneyStepper';
+import { SpecCard } from './SpecCard';
 import { MarkdownContent } from './MarkdownContent';
 import { StreamingAgentDisplay } from './StreamingAgentDisplay';
 import { StreamingCodePanel } from '../StreamingCodePanel';
@@ -28,7 +30,8 @@ export const ArchitectChat: React.FC = () => {
     builderSessionId,
     isGeneratingAgent,
     pendingFiles,
-    setCurrentAgentPhase
+    setCurrentAgentPhase,
+    builderJourney
   } = useAgentStudioStore();
 
   const [inputVal, setInputVal] = useState('');
@@ -96,6 +99,9 @@ export const ArchitectChat: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {/* Guided build journey: 7 interview steps, then Build and Deploy */}
+        <JourneyStepper journey={builderJourney} busy={isChatLoading || isGeneratingAgent} />
 
         {/* HUD Content */}
         {!hudCollapsed && (
@@ -190,6 +196,8 @@ export const ArchitectChat: React.FC = () => {
                   }`}
                 >
                   <MarkdownContent content={msg.content} isUser={isUser} />
+
+                  {msg.architectureSpec && <SpecCard spec={msg.architectureSpec} />}
 
                   {/* If this message contains interactive decisions, render the form */}
                   {msg.decisionGroup && (

@@ -122,6 +122,15 @@ STATE_AGENT_CARDS = "agent_cards"
 STATE_PROJECT_NAME = "project_name"
 STATE_GENERATED_FILES = "generated_files"
 STATE_NOTES = "notes"
+STATE_VERIFICATION = "verification"
+STATE_PENDING_DECISIONS = "pending_decisions"  # structured select-cards awaiting the user (read by the Studio UI)
+STATE_DECISIONS = "decisions_answered"  # every decision the user has made, keyed by question id
+STATE_DECISION_ROUND = "decision_round"
+STATE_RESEARCH = "design_research"
+STATE_BUILD_RECORD = "build_record"
+STATE_INTERVIEW = "interview"  # {"index", "completed", "approved", "return_to_compile"}: the guided interview position
+STATE_ARCH_SPEC = "architecture_spec"  # compiled Agent Architecture Specification (lead prompt, roles, JSON config)
+STATE_BUILD_PHASE = "build_phase"  # current pipeline phase, mirrored to the Studio's journey stepper
 
 # Keys the orchestrator may write through save_progress (the guardrail verdict
 # is deliberately excluded: only the guardrails sub-agent can record it).

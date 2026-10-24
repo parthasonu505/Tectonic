@@ -329,12 +329,40 @@ You can use these shared platform tools:
 """
 
 
-def worker_tools(team: str = "default") -> list[Callable[..., Any]]:
-    """Tool set for generated worker agents."""
-    return [core_guardrails_check, core_classify_intent, core_define_intents, core_memory_note, core_memory_context,
-            core_remember, *_team_tools(team), core_list_tools, core_call_tool,
-            core_knowledge_search, core_ask_knowledge, core_add_knowledge, core_spend_status, core_prompt_feedback,
-            core_audit_trail]
+# Which platform module each worker tool belongs to (None: always available).
+_TOOL_MODULE = {
+    "core_guardrails_check": "guardrails", "core_classify_intent": "intent_detection", "core_define_intents": "intent_detection",
+    "core_memory_note": "short_term_memory", "core_memory_context": "short_term_memory",
+    "core_remember": "long_term_memory", "core_recall": "long_term_memory", "core_share_knowledge": "long_term_memory",
+    "core_list_tools": "tool_orchestration", "core_call_tool": "tool_orchestration",
+    "core_knowledge_search": ("agentic_rag", "vector_db"), "core_ask_knowledge": "agentic_rag", "core_add_knowledge": "agentic_rag",
+    "core_spend_status": "finops", "core_prompt_feedback": "promptops", "core_audit_trail": "auditability",
+}
+
+
+def worker_tools(team: str = "default", modules: list[str] | tuple[str, ...] | None = None) -> list[Callable[..., Any]]:
+    """Tool set for generated worker agents.
+
+    Args:
+        team: The worker's team (generated project name).
+        modules: Platform modules enabled in the approved architecture spec; None enables all of them.
+            Governance (budget metering, audit, prompt management) still applies platform-side either way.
+    """
+    tools = [core_guardrails_check, core_classify_intent, core_define_intents, core_memory_note, core_memory_context,
+             core_remember, *_team_tools(team), core_list_tools, core_call_tool,
+             core_knowledge_search, core_ask_knowledge, core_add_knowledge, core_spend_status, core_prompt_feedback,
+             core_audit_trail]
+    if modules is None:
+        return tools
+    enabled = set(modules)
+
+    def allowed(tool: Callable[..., Any]) -> bool:
+        owner = _TOOL_MODULE.get(getattr(tool, "__name__", ""))
+        if owner is None:
+            return True
+        return bool(enabled.intersection(owner if isinstance(owner, tuple) else (owner,)))
+
+    return [t for t in tools if allowed(t)]
 
 
 def builder_tools(team: str = "default") -> list[Callable[..., Any]]:

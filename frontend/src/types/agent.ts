@@ -26,6 +26,7 @@ export interface SubAgentNode {
 export interface DecisionOption {
   id: string;
   label: string;
+  description?: string;
   isRecommended?: boolean;
 }
 
@@ -37,6 +38,12 @@ export interface DecisionQuestion {
   selectedOption: string;
   isCustom: boolean;
   customValue: string;
+  /** Structured decisions from the Builder (pending_decisions). */
+  why?: string;
+  category?: string;
+  multiSelect?: boolean;
+  selectedOptions?: string[];
+  allowCustom?: boolean;
 }
 
 export interface DecisionGroup {
@@ -46,6 +53,40 @@ export interface DecisionGroup {
   questions: DecisionQuestion[];
   extraNotes?: string;
   isSubmitted?: boolean;
+  /** True when built from the Builder's structured pending_decisions (answers go back as DECISIONS_JSON). */
+  structured?: boolean;
+  round?: number;
+  /** Interview step this card belongs to ("Step 3 of 7 · Architecture & topology"). */
+  step?: InterviewStepRef;
+}
+
+export interface InterviewStepRef {
+  key: string;
+  number: number;
+  total: number;
+  title: string;
+  phase: string;
+}
+
+/** The Builder's `build_phase` state: where the guided interview / build currently is. */
+export interface BuilderJourney {
+  stepIndex: number;
+  total: number;
+  completed: string[];
+  approved: boolean;
+  phase: string;
+  /** 0-5 across design validation → deliver once the spec is approved; null before. */
+  buildStage: number | null;
+  steps: { key: string; title: string; phase: string }[];
+}
+
+/** Phase 4 output: the compiled Agent Architecture Specification. */
+export interface ArchitectureSpec {
+  project: string;
+  markdown: string;
+  leadSystemPrompt: string;
+  config: Record<string, unknown>;
+  enabledModules: string[];
 }
 
 export interface ExtractedAgentSpec {
@@ -65,6 +106,7 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   decisionGroup?: DecisionGroup;
+  architectureSpec?: ArchitectureSpec;
   structuredInfo?: {
     goal?: string;
     tools?: string[];

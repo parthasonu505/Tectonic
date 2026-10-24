@@ -3,7 +3,7 @@
 from google.adk.agents import LlmAgent
 from google.adk.agents.readonly_context import ReadonlyContext
 
-from ...shared_libraries.constants import MODEL, STATE_AGENT_CARDS, STATE_PROJECT_NAME, STATE_REQUIREMENTS
+from ...shared_libraries.constants import MODEL, STATE_AGENT_CARDS, STATE_DECISIONS, STATE_PROJECT_NAME, STATE_REQUIREMENTS, STATE_RESEARCH
 from ...tools.memory import load_profile, render_state_block
 from ...tracing import TRACE_CALLBACKS
 from . import prompt
@@ -20,7 +20,7 @@ from .tools import (
 
 def _instruction(context: ReadonlyContext) -> str:
     return prompt.AGENT_CARD_PROMPT + render_state_block(
-        context, (STATE_PROJECT_NAME, STATE_REQUIREMENTS, STATE_AGENT_CARDS)
+        context, (STATE_PROJECT_NAME, STATE_REQUIREMENTS, STATE_DECISIONS, STATE_RESEARCH, STATE_AGENT_CARDS)
     )
 
 

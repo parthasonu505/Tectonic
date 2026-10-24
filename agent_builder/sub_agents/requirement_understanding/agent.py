@@ -7,8 +7,11 @@ from ...shared_libraries.constants import (
     MODEL,
     STATE_GUARDRAIL_REPORT,
     STATE_INTENT,
+    STATE_INTERVIEW,
     STATE_NOTES,
     STATE_REQUIREMENTS,
+    STATE_DECISIONS,
+    STATE_RESEARCH,
 )
 from ...shared_libraries.types import Requirements
 from ...tools.memory import render_state_block
@@ -18,7 +21,7 @@ from . import prompt
 
 def _instruction(context: ReadonlyContext) -> str:
     return prompt.REQUIREMENTS_PROMPT + render_state_block(
-        context, (STATE_INTENT, STATE_REQUIREMENTS, STATE_NOTES, STATE_GUARDRAIL_REPORT)
+        context, (STATE_INTENT, STATE_INTERVIEW, STATE_DECISIONS, STATE_REQUIREMENTS, STATE_NOTES, STATE_GUARDRAIL_REPORT, STATE_RESEARCH)
     )
 
 
@@ -26,8 +29,8 @@ requirement_understanding_agent = LlmAgent(
     name="requirement_understanding",
     model=MODEL,
     description=(
-        "Interactively elicits and clarifies user requirements by asking questions across turns until "
-        "all details are known, then outputs a complete technical specification."
+        "Runs the guided interview: asks 1-2 use-case-specific checkbox questions for the current step, "
+        "and on 'COMPILE' outputs the complete technical specification."
     ),
     instruction=_instruction,
     output_schema=Requirements,

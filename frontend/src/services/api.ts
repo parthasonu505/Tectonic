@@ -3,7 +3,9 @@ import type {
   DecisionGroup, 
   DecisionQuestion, 
   DecisionOption,
-  CreatedAgent, 
+  ArchitectureSpec,
+  BuilderJourney,
+  CreatedAgent,
   EnvConfig 
 } from '../types/agent';
 
@@ -12,6 +14,8 @@ export interface ChatResponse {
   decisionGroup?: DecisionGroup;
   extractedSpec?: Partial<ExtractedAgentSpec>;
   isComplete?: boolean;
+  journey?: BuilderJourney;
+  architectureSpec?: ArchitectureSpec;
 }
 
 export interface ConfirmPayload {
@@ -207,6 +211,9 @@ class ApiService {
   private parseBuilderEvents(events: any[]): ChatResponse {
     let replyText = '';
     let extractedRequirements: any = null;
+    let pendingDecisions: any = undefined;
+    let journey: BuilderJourney | undefined;
+    let architectureSpec: ArchitectureSpec | undefined;
 
     // Scan events in reverse or collect relevant parts
     for (const event of events) {
@@ -233,6 +240,19 @@ class ApiService {
         if (event.actions.stateDelta.requirements) {
           extractedRequirements = event.actions.stateDelta.requirements;
         }
+        if ('pending_decisions' in event.actions.stateDelta) {
+          pendingDecisions = event.actions.stateDelta.pending_decisions;
+        }
+        if (event.actions.stateDelta.build_phase) {
+          journey = this.toJourney(event.actions.stateDelta.build_phase);
+        }
+        const arch = event.actions.stateDelta.architecture_spec;
+        if (arch && arch.markdown) {
+          architectureSpec = {
+            project: String(arch.project ?? ''), markdown: String(arch.markdown), leadSystemPrompt: String(arch.lead_system_prompt ?? ''),
+            config: arch.config ?? {}, enabledModules: Array.isArray(arch.enabled_modules) ? arch.enabled_modules : [],
+          };
+        }
       }
     }
 
@@ -240,8 +260,18 @@ class ApiService {
       replyText = 'Agent builder processed your request.';
     }
 
-    // Build DecisionGroup from extractedRequirements or text checkboxes
-    const decisionGroup = this.extractDecisionGroup(extractedRequirements, replyText);
+    // Structured decision cards from the Builder win; legacy markdown parsing is only a fallback.
+    const structured = this.structuredDecisionGroup(pendingDecisions);
+    if (structured) {
+      replyText = replyText.replace(/<!--decisions-->[\s\S]*?<!--\/decisions-->/g, '').trim();
+    } else {
+      replyText = replyText.replace(/<!--\/?decisions-->/g, '').trim();
+    }
+    // The compiled specification renders as its own card, so drop the copy pasted into the reply.
+    replyText = architectureSpec
+      ? replyText.replace(/<!--spec-->[\s\S]*?<!--\/spec-->/g, '').trim()
+      : replyText.replace(/<!--\/?spec-->/g, '').trim();
+    const decisionGroup = structured ?? (pendingDecisions === undefined ? this.extractDecisionGroup(extractedRequirements, replyText) : undefined);
 
     // Build ExtractedAgentSpec for 3D visualizer
     const extractedSpec: Partial<ExtractedAgentSpec> = {};
@@ -273,7 +303,46 @@ class ApiService {
       reply: replyText,
       decisionGroup,
       extractedSpec: Object.keys(extractedSpec).length > 0 ? extractedSpec : undefined,
-      isComplete: extractedRequirements?.is_complete || false
+      isComplete: extractedRequirements?.is_complete || false,
+      journey,
+      architectureSpec,
+    };
+  }
+
+  private toJourney(raw: any): BuilderJourney {
+    return {
+      stepIndex: Number(raw.step_index ?? 0), total: Number(raw.total ?? 7), completed: raw.completed ?? [],
+      approved: !!raw.approved, phase: String(raw.phase ?? ''),
+      buildStage: typeof raw.build_stage === 'number' ? raw.build_stage : null, steps: raw.steps ?? [],
+    };
+  }
+
+  /** Map the Builder's pending_decisions state (exact, typed) to a DecisionGroup. */
+  private structuredDecisionGroup(pending: any): DecisionGroup | undefined {
+    if (!pending || !Array.isArray(pending.questions) || pending.questions.length === 0) return undefined;
+    const questions: DecisionQuestion[] = pending.questions.map((q: any) => {
+      const options: DecisionOption[] = (q.options ?? []).map((o: any) => ({
+        id: String(o.id), label: String(o.label), description: o.description || undefined, isRecommended: !!o.recommended,
+      }));
+      const rec = options.find((o) => o.isRecommended) ?? options[0];
+      // Multi-select checklists start with every recommended option ticked.
+      const recommended = options.filter((o) => o.isRecommended).map((o) => o.id);
+      return {
+        id: String(q.id), title: String(q.title), description: q.why || undefined, why: q.why || undefined,
+        category: q.category, multiSelect: !!q.multi_select, allowCustom: q.allow_custom !== false,
+        options, selectedOption: rec?.id ?? '',
+        selectedOptions: q.multi_select && recommended.length ? recommended : rec ? [rec.id] : [], isCustom: false, customValue: '',
+      };
+    });
+    const step = pending.step;
+    return {
+      id: String(pending.id ?? `decisions-${Date.now()}`),
+      title: String(pending.title ?? 'Design decisions'),
+      description: 'Tick your choices (recommended options are pre-selected), or write your own under Other.',
+      questions,
+      structured: true,
+      round: pending.round,
+      step: step ? { key: String(step.key), number: Number(step.number), total: Number(step.total), title: String(step.title), phase: String(step.phase) } : undefined,
     };
   }
 

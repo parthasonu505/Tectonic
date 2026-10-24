@@ -53,13 +53,21 @@ OPERATOR_READS = {"report", "rates", "recommendations", "check", "stats", "list_
                   "ab_status", "query", "verify", "documents_list", "recent", "search", "resolve"}
 
 
-def redact(value: Any) -> Any:
+_IDENTIFIER_RE = re.compile(r"^[0-9a-fA-F][0-9a-fA-F-]{15,}$")  # hex digests, UUIDs
+_IDENTIFIER_KEYS = re.compile(r"(^id$|_id$|hash|sha\d*|digest|call_id|invocation)", re.I)
+
+
+def redact(value: Any, key: str = "") -> Any:
+    """PII-redact free text. Identifiers (hashes, UUIDs, *_id fields) are left intact: the phone/card
+    patterns would otherwise mangle digit runs inside digests and break traceability."""
     if isinstance(value, str):
+        if (key and _IDENTIFIER_KEYS.search(key)) or _IDENTIFIER_RE.match(value):
+            return value
         return pii_detector.detect_and_redact(value, PII_TYPES)[0] if len(value) < 20_000 else value[:20_000]
     if isinstance(value, dict):
-        return {k: redact(v) for k, v in value.items()}
+        return {k: redact(v, str(k)) for k, v in value.items()}
     if isinstance(value, list):
-        return [redact(v) for v in value[:200]]
+        return [redact(v, key) for v in value[:200]]
     return value
 
 
@@ -302,6 +310,18 @@ class AuditabilityModule(BaseModule):
         return {"pack_id": pack.id, "event_count": pack.event_count, "chain_valid": pack.chain_valid,
                 "document_ref": pack.document_ref, "format": "json", "document_b64": pack.document_bytes_b64,
                 "bytes": len(base64.b64decode(pack.document_bytes_b64 or ""))}
+
+    @operation("Record a governance event (e.g. DESIGN_DECISIONS, BUILD_COMPLETED) in the hash chain.", permission="admin")
+    async def record_event(self, ctx: CallContext, event_type: str, payload: dict[str, Any] | None = None,
+                           team: str | None = None) -> dict[str, Any]:
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,40}", event_type or ""):
+            raise ValueError("event_type must be UPPER_SNAKE_CASE (3-41 chars)")
+        body = {"agent_id": ctx.agent_id, "team": team or ctx.team, **(payload or {})}
+        self._enqueue(f"agent:{ctx.agent_id}", event_type, body)
+        await self.flush()
+        last = self.repository.events[-1] if self.repository.events else None
+        return {"recorded": event_type, "sequence": last.sequence_number if last else None,
+                "entry_hash": last.entry_hash if last else None}
 
     @operation("Counts by event type and source.")
     async def stats(self, ctx: CallContext) -> dict[str, Any]:

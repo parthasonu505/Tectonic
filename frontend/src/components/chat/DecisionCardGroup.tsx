@@ -55,6 +55,9 @@ export const DecisionCardGroup: React.FC<DecisionCardGroupProps> = ({ decisionGr
     return <Sliders className="w-4 h-4 text-amber-400" />;
   };
 
+  const chosenIds = (q: typeof activeGroup.questions[number]) =>
+    q.multiSelect ? (q.selectedOptions ?? []) : q.selectedOption ? [q.selectedOption] : [];
+
   const handleSubmitSelected = () => {
     if (isChatLoading || isGeneratingAgent) return;
 
@@ -63,15 +66,23 @@ export const DecisionCardGroup: React.FC<DecisionCardGroupProps> = ({ decisionGr
       if (q.isCustom) {
         chosenText = `Custom: ${q.customValue || 'User defined preference'}`;
       } else {
-        const opt = q.options.find((o) => o.id === q.selectedOption);
-        chosenText = opt ? opt.label : q.selectedOption;
+        const labels = chosenIds(q).map((id) => q.options.find((o) => o.id === id)?.label ?? id);
+        chosenText = labels.join(', ') || 'recommended default';
       }
       return `${idx + 1}. ${q.title}: ${chosenText}`;
     });
 
-    const msg = `Selected Preferences:\n${summaryLines.join('\n')}${
+    const display = `Selected Preferences:\n${summaryLines.join('\n')}${
       activeGroup.extraNotes ? `\nAdditional Notes: ${activeGroup.extraNotes}` : ''
-    }\n\nPlease proceed with these choices and generate the agent now.`;
+    }`;
+    // Structured groups answer the Builder exactly (no text parsing on the other side).
+    const answers = Object.fromEntries(activeGroup.questions.map((q) => [
+      q.id,
+      q.isCustom ? { custom: q.customValue || 'User defined preference' } : q.multiSelect ? { options: chosenIds(q) } : { option: q.selectedOption },
+    ]));
+    const msg = activeGroup.structured
+      ? `${display}\n\nDECISIONS_JSON: ${JSON.stringify({ answers, notes: activeGroup.extraNotes || '' })}`
+      : `${display}\n\nPlease proceed with these choices and generate the agent now.`;
 
     // Mark as submitted locally in store
     useAgentStudioStore.setState((state) => ({
@@ -85,7 +96,7 @@ export const DecisionCardGroup: React.FC<DecisionCardGroupProps> = ({ decisionGr
       )
     }));
 
-    sendArchitectMessage(msg);
+    sendArchitectMessage(msg, display);
   };
 
   const handleProceedDefaults = () => {
@@ -104,7 +115,12 @@ export const DecisionCardGroup: React.FC<DecisionCardGroupProps> = ({ decisionGr
       )
     }));
 
-    sendArchitectMessage('Proceed with recommended defaults. Please build and generate the agent now.');
+    if (activeGroup.structured) {
+      sendArchitectMessage(`Use the recommended defaults.\n\nDECISIONS_JSON: ${JSON.stringify({ defaults: true, notes: activeGroup.extraNotes || '' })}`,
+        'Use the recommended defaults.');
+    } else {
+      sendArchitectMessage('Proceed with recommended defaults. Please build and generate the agent now.');
+    }
   };
 
   return (
@@ -134,6 +150,21 @@ export const DecisionCardGroup: React.FC<DecisionCardGroupProps> = ({ decisionGr
                 </span>
               )}
             </h4>
+            {activeGroup.step && (
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-[10px] font-mono uppercase tracking-wider text-sky-300/80">{activeGroup.step.phase}</span>
+                <div className="flex gap-0.5" aria-label={`Step ${activeGroup.step.number} of ${activeGroup.step.total}`}>
+                  {Array.from({ length: activeGroup.step.total }, (_, i) => (
+                    <span
+                      key={i}
+                      className={`h-1 w-4 rounded-full ${
+                        i < activeGroup.step!.number - 1 ? 'bg-emerald-400/70' : i === activeGroup.step!.number - 1 ? 'bg-sky-400' : 'bg-white/10'
+                      }`}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
             {activeGroup.description && (
               <p className="text-xs text-slate-400 mt-0.5">{activeGroup.description}</p>
             )}
@@ -172,17 +203,20 @@ export const DecisionCardGroup: React.FC<DecisionCardGroupProps> = ({ decisionGr
                     {question.title}
                   </span>
                 </div>
-                {question.description && (
-                  <span className="text-[11px] text-slate-400 hidden sm:inline-block">
-                    {question.description}
-                  </span>
+                {question.multiSelect && (
+                  <span className="text-[10px] font-mono text-slate-400">choose any</span>
                 )}
               </div>
+              {question.description && (
+                <p className="-mt-1 mb-2.5 text-[11px] leading-relaxed text-slate-400">{question.description}</p>
+              )}
 
               {/* Checkbox Options Grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 {question.options.map((option) => {
-                  const isSelected = !question.isCustom && question.selectedOption === option.id;
+                  const isSelected = !question.isCustom && (question.multiSelect
+                    ? (question.selectedOptions ?? []).includes(option.id)
+                    : question.selectedOption === option.id);
 
                   return (
                     <button
@@ -219,6 +253,9 @@ export const DecisionCardGroup: React.FC<DecisionCardGroupProps> = ({ decisionGr
                             </span>
                           )}
                         </div>
+                        {option.description && (
+                          <div className="mt-0.5 text-[11px] leading-snug text-slate-400">{option.description}</div>
+                        )}
                       </div>
                     </button>
                   );
