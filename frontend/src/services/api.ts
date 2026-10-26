@@ -5,6 +5,8 @@ import type {
   DecisionOption,
   ArchitectureSpec,
   BuilderJourney,
+  DirectoryAgent,
+  TraceStep,
   CreatedAgent,
   EnvConfig 
 } from '../types/agent';
@@ -16,7 +18,34 @@ export interface ChatResponse {
   isComplete?: boolean;
   journey?: BuilderJourney;
   architectureSpec?: ArchitectureSpec;
+  trace?: TraceStep[];
+  /** Set when the Builder handed the message to an existing agent (ask_agent). */
+  routedTo?: string;
+  routedAgent?: string;
 }
+
+export interface AgentChatResult {
+  target: string;
+  agent: string;
+  kind: DirectoryAgent['kind'];
+  project: string | null;
+  reply: string;
+  trace: TraceStep[];
+  duration_ms: number;
+}
+
+export interface AgentDeleteResult {
+  kind: 'project' | 'sub_agent';
+  project: string;
+  deleted: string[];
+  agents: string[];
+  detached_from?: string[];
+}
+
+const compactJson = (value: unknown, limit = 160): string => {
+  const text = (typeof value === 'string' ? value : JSON.stringify(value)) ?? '';
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+};
 
 export interface ConfirmPayload {
   decisions: Record<string, string>;
@@ -306,7 +335,75 @@ class ApiService {
       isComplete: extractedRequirements?.is_complete || false,
       journey,
       architectureSpec,
+      ...this.extractTrace(events),
     };
+  }
+
+  /** Who ran in this Builder turn: agent hand-offs, tool / specialist calls, and (via ask_agent) the
+   *  agents the Builder reached on the user's behalf, with their own nested steps. */
+  private extractTrace(events: any[]): { trace: TraceStep[]; routedTo?: string; routedAgent?: string } {
+    const trace: TraceStep[] = [];
+    const byCallId = new Map<string, TraceStep>();
+    let lastAuthor = '';
+    let routedTo: string | undefined;
+    let routedAgent: string | undefined;
+    for (const event of events) {
+      const author: string = event.author || '';
+      if (author && author !== 'user' && author !== lastAuthor) {
+        trace.push({ type: 'agent', agent: author });
+        lastAuthor = author;
+      }
+      for (const part of event.content?.parts ?? []) {
+        if (part.functionCall) {
+          const fc = part.functionCall;
+          const step: TraceStep = { type: 'tool', agent: author, name: fc.name, args: compactJson(fc.args ?? {}) };
+          trace.push(step);
+          if (fc.id) byCallId.set(fc.id, step);
+        }
+        if (part.functionResponse) {
+          const fr = part.functionResponse;
+          const resp = fr.response ?? {};
+          const step = fr.id ? byCallId.get(fr.id) : undefined;
+          if (step) step.status = typeof resp.status === 'string' ? resp.status : 'done';
+          if (fr.name === 'ask_agent' && Array.isArray(resp.trace)) {
+            routedTo = resp.target;
+            routedAgent = resp.agent;
+            for (const inner of resp.trace) trace.push({ ...inner, nested: true });
+          }
+        }
+      }
+    }
+    return { trace, routedTo, routedAgent };
+  }
+
+  // --- Agent directory: every agent reachable from the Builder chat ---
+  public async fetchDirectory(): Promise<DirectoryAgent[]> {
+    try {
+      const res = await fetch('/directory/agents');
+      if (!res.ok) return [];
+      return (await res.json()).agents ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Talk to one agent directly (a generated project, its sub-agent, or a Builder specialist). */
+  public async chatWithAgent(target: string, message: string, sessionKey: string): Promise<AgentChatResult> {
+    const res = await fetch('/directory/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, message, session_key: sessionKey }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `Agent call failed (${res.status})`);
+    return data as AgentChatResult;
+  }
+
+  public async deleteDirectoryAgent(id: string): Promise<AgentDeleteResult> {
+    const res = await fetch(`/directory/agents/${id.split('/').map(encodeURIComponent).join('/')}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `Delete failed (${res.status})`);
+    return data as AgentDeleteResult;
   }
 
   private toJourney(raw: any): BuilderJourney {

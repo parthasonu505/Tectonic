@@ -5,6 +5,7 @@ import type {
   DecisionGroup,
   BuilderJourney,
   ChatMessage,
+  DirectoryAgent,
   SandboxChatMessage,
   CreatedAgent,
   EnvConfig,
@@ -48,6 +49,15 @@ interface AgentStudioState {
   setSelectedAgent: (agent: CreatedAgent | null) => void;
   /** Re-reads generated_agents/. Returns agents that appeared since the last refresh and selects the newest of them. */
   refreshCreatedAgents: () => Promise<CreatedAgent[]>;
+
+  // Unified chat: every agent (Builder specialists, generated projects and their sub-agents)
+  agentDirectory: DirectoryAgent[];
+  refreshDirectory: () => Promise<void>;
+  /** Directory id the chat sends to; null = the Agent Builder (which also routes on its own). */
+  chatTarget: string | null;
+  setChatTarget: (id: string | null) => void;
+  /** Deletes a generated project or sub-agent: its code, its chat history here, and its Studio presence. */
+  deleteDirectoryAgent: (id: string) => Promise<void>;
   agentsLoaded: boolean;
 
   // Sessions
@@ -206,6 +216,39 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
     return added;
   },
 
+  agentDirectory: [],
+  refreshDirectory: async () => {
+    const agents = await api.fetchDirectory();
+    if (agents.length === 0) return; // backend unreachable: keep what we have
+    const target = get().chatTarget;
+    set({ agentDirectory: agents, chatTarget: target && agents.some((a) => a.id === target) ? target : null });
+  },
+  chatTarget: null,
+  setChatTarget: (id) => set({ chatTarget: id && id !== 'agent_builder' ? id : null }),
+
+  deleteDirectoryAgent: async (id: string) => {
+    const result = await api.deleteDirectoryAgent(id);
+    const gone = new Set(result.deleted);
+    const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    set((state) => ({
+      // Its conversation in this chat goes with it.
+      chatMessages: [
+        ...state.chatMessages.filter((m) => !(m.agentTarget && gone.has(m.agentTarget))),
+        {
+          id: `msg-deleted-${Date.now()}`,
+          sender: 'system' as const,
+          content: result.kind === 'project'
+            ? `🗑️ Deleted project **${result.project}** (${result.agents.length} agents) — code, registry and knowledge removed.`
+            : `🗑️ Deleted **${result.agents.join(', ')}** from **${result.project}** — code removed and detached from ${(result.detached_from ?? []).join(', ') || 'its parent'}.`,
+          timestamp: stamp,
+        },
+      ],
+      chatTarget: state.chatTarget && gone.has(state.chatTarget) ? null : state.chatTarget,
+    }));
+    if (result.kind === 'project' && get().selectedAgent?.name === result.project) set({ selectedAgent: null });
+    await Promise.all([get().refreshDirectory(), get().refreshCreatedAgents()]);
+  },
+
   // Sessions
   builderSessionId: null,
   sandboxSessionId: null,
@@ -220,7 +263,7 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
           {
             id: `msg-welcome-${Date.now()}`,
             sender: 'assistant',
-            content: `👋 **Agent Architect Session Initialized!**\n\nI am the Meta-Agent Builder. I use sub-agents (**guardrails**, **intent detection**, **requirement understanding**, and **code generator**) to interview you with cross-questions and build your custom Google ADK agent.\n\nTell me: What kind of agent would you like to build? (e.g. *"Create a local attendance manager"* or *"Build an offline flight booking coordinator"*).`,
+            content: `👋 **Agent Architect Session Initialized!**\n\nI am the Agent Builder. I use sub-agents (**guardrails**, **intent detection**, **requirement understanding**, and **code generator**) to interview you with cross-questions and build your custom Google ADK agent.\n\nTell me: What kind of agent would you like to build? (e.g. *"Create a local attendance manager"* or *"Build an offline flight booking coordinator"*).`,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
           }
         ],
@@ -285,11 +328,32 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
       set({ builderSessionId: sid });
     }
 
+    // Who is this for? "@agent ..." or the picked target go straight to that agent; everything else
+    // (and every decision-card answer) goes to the Agent Builder, which can still route to agents itself.
+    const directory = get().agentDirectory;
+    let target: DirectoryAgent | undefined;
+    let text = content;
+    if (!content.includes('DECISIONS_JSON:')) {
+      const mention = content.match(/^\s*@([\w./-]+)[\s,:]+([\s\S]+)$/);
+      if (mention) {
+        const key = mention[1].toLowerCase();
+        target = directory.find((a) => a.id.toLowerCase() === key)
+          ?? directory.find((a) => a.name.toLowerCase() === key)
+          ?? directory.find((a) => a.kind === 'project' && a.project?.toLowerCase() === key);
+        if (target) text = mention[2];
+      } else if (get().chatTarget) {
+        target = directory.find((a) => a.id === get().chatTarget);
+      }
+      if (target?.kind === 'builder') target = undefined;
+    }
+    const stamp = () => new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
     const userMsg: ChatMessage = {
       id: `msg-${Date.now()}`,
       sender: 'user',
       content: display ?? content,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      timestamp: stamp(),
+      agentTarget: target?.id,
     };
 
     set((state) => ({
@@ -299,20 +363,59 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
       currentAgentPhase: 'orchestrator'
     }));
 
+    if (target) {
+      try {
+        const result = await api.chatWithAgent(target.id, text, sid);
+        set((state) => ({
+          chatMessages: [...state.chatMessages, {
+            id: `msg-${Date.now() + 1}`,
+            sender: 'assistant' as const,
+            content: result.reply,
+            timestamp: stamp(),
+            agentTarget: result.target,
+            agentName: result.agent,
+            trace: result.trace,
+          }],
+          isChatLoading: false,
+          isStreaming: false,
+        }));
+      } catch (err: any) {
+        set((state) => ({
+          chatMessages: [...state.chatMessages, {
+            id: `msg-err-${Date.now()}`,
+            sender: 'assistant' as const,
+            content: `⚠️ **${target!.id}** could not answer: ${err.message || 'agent call failed'}`,
+            timestamp: stamp(),
+            agentTarget: target!.id,
+            agentName: target!.name,
+          }],
+          isChatLoading: false,
+          isStreaming: false,
+        }));
+      }
+      return;
+    }
+
     try {
-      // Direct call to LLM Agent Builder
+      // The Agent Builder: builds agents, and routes requests for existing ones through ask_agent.
       const resp = await api.sendBuilderChat(content, sid);
       const assistantMsg: ChatMessage = {
         id: `msg-${Date.now() + 1}`,
         sender: 'assistant',
         content: resp.reply,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: stamp(),
         decisionGroup: resp.decisionGroup,
-        architectureSpec: resp.architectureSpec
+        architectureSpec: resp.architectureSpec,
+        trace: resp.trace,
+        agentTarget: resp.routedTo,
       };
+      if (resp.routedTo) {
+        // The question and its answer belong to the agent the Builder reached (deleted together with it).
+        userMsg.agentTarget = resp.routedTo;
+      }
 
       set((state) => ({
-        chatMessages: [...state.chatMessages, assistantMsg],
+        chatMessages: [...state.chatMessages.map((m) => (m.id === userMsg.id ? { ...userMsg } : m)), assistantMsg],
         isChatLoading: false,
         isStreaming: false,
         currentDecisionGroup: resp.decisionGroup || state.currentDecisionGroup,
@@ -320,9 +423,8 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
         spec: resp.extractedSpec ? { ...state.spec, ...resp.extractedSpec } : state.spec
       }));
 
-      // The Builder can generate a project from any chat turn (e.g. "Proceed with defaults"),
-      // not only via the decision card, so check for new agents after every reply.
-      const added = await get().refreshCreatedAgents();
+      // The Builder can generate (or delete) a project from any chat turn, so resync after every reply.
+      const [added] = await Promise.all([get().refreshCreatedAgents(), get().refreshDirectory()]);
       if (added.length > 0) {
         const names = added.map((a) => `**${a.name}**`).join(', ');
         set((state) => ({
@@ -330,8 +432,8 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
           chatMessages: [...state.chatMessages, {
             id: `msg-agent-ready-${Date.now()}`,
             sender: 'assistant' as const,
-            content: `✅ New agent ${names} is ready and selected in the **Live Sandbox** tab.`,
-            timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            content: `✅ New agent ${names} is ready: chat with it here as \`@${added[0].name}\`, or in the **Live Sandbox** tab.`,
+            timestamp: stamp()
           }]
         }));
       }
@@ -341,7 +443,7 @@ export const useAgentStudioStore = create<AgentStudioState>((set, get) => ({
         id: `msg-err-${Date.now()}`,
         sender: 'assistant',
         content: `⚠️ **Backend Execution Error:**\n${err.message || 'Unable to communicate with agent builder.'}\n\nPlease verify that your Google API Key (GOOGLE_API_KEY) is set in your .env file.`,
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        timestamp: stamp()
       };
       set((state) => ({
         chatMessages: [...state.chatMessages, errMsg],

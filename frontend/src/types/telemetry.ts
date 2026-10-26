@@ -133,8 +133,16 @@ export interface ModuleCallEndEvent extends EventBase {
   error?: string;
 }
 
+/** Agents deleted in the Studio (their code is gone): drop them from every view. */
+export interface AgentDeletedEvent extends EventBase {
+  type: 'AGENT_DELETED';
+  ids: string[];
+  project?: string | null;
+}
+
 export type TelemetryEvent =
   | HelloEvent
+  | AgentDeletedEvent
   | ModuleRegisteredEvent
   | ModuleStateEvent
   | ModuleCallStartEvent

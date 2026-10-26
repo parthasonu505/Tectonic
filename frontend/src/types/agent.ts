@@ -80,6 +80,33 @@ export interface BuilderJourney {
   steps: { key: string; title: string; phase: string }[];
 }
 
+/** An agent reachable from the Builder chat (GET /directory/agents). */
+export interface DirectoryAgent {
+  /** 'agent_builder', 'agent_builder/<specialist>', '<project>' or '<project>/<sub_agent_dir>'. */
+  id: string;
+  name: string;
+  kind: 'builder' | 'builder_sub_agent' | 'project' | 'sub_agent';
+  project: string | null;
+  parent: string | null;
+  depth: number;
+  description: string;
+  tools: string[];
+  children: string[];
+  deletable: boolean;
+}
+
+/** One hop of a chat turn: an agent taking over, or a tool / agent-tool it called. */
+export interface TraceStep {
+  type: 'agent' | 'tool';
+  agent: string;
+  name?: string;
+  args?: string;
+  status?: string;
+  detail?: string;
+  /** Ran inside another agent reached through ask_agent. */
+  nested?: boolean;
+}
+
 /** Phase 4 output: the compiled Agent Architecture Specification. */
 export interface ArchitectureSpec {
   project: string;
@@ -107,6 +134,11 @@ export interface ChatMessage {
   timestamp: string;
   decisionGroup?: DecisionGroup;
   architectureSpec?: ArchitectureSpec;
+  /** Directory id of the agent this message was sent to / answered by (absent: the Builder). */
+  agentTarget?: string;
+  /** Agent name that answered (shown instead of "Meta-Agent Builder"). */
+  agentName?: string;
+  trace?: TraceStep[];
   structuredInfo?: {
     goal?: string;
     tools?: string[];

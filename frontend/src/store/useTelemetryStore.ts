@@ -188,6 +188,22 @@ function reduce(prev: TelemetryData, events: TelemetryEvent[], now: number): Tel
         break;
       }
 
+      case 'AGENT_DELETED': {
+        const gone = new Set(e.ids.filter((id) => d.agents[id]));
+        if (gone.size === 0) break;
+        const agents = own('agents');
+        for (const id of gone) delete agents[id];
+        // Children of a deleted agent become roots rather than dangling.
+        for (const [id, meta] of Object.entries(agents)) {
+          if (meta.parentId && gone.has(meta.parentId)) agents[id] = { ...meta, parentId: null };
+        }
+        d.agentOrder = d.agentOrder.filter((id) => !gone.has(id));
+        d.extraEdges = d.extraEdges.filter((x) => !gone.has(x.source) && !gone.has(x.target));
+        d.moduleLinks = d.moduleLinks.filter((x) => !gone.has(x.source));
+        log(e, 'state', `Deleted ${[...gone].join(', ')}${e.project ? ` (${e.project})` : ''}`);
+        break;
+      }
+
       case 'AGENT_STATE_CHANGE': {
         ensureAgent(e.id, e.timestamp);
         const prevState = d.agents[e.id]?.state;

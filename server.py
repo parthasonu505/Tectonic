@@ -8,6 +8,7 @@ The shared core modules (tectonic_runtime) stream their activity on the same soc
 """
 
 import asyncio
+import gc
 import os
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from fastapi import Body, HTTPException
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.cli.utils._nested_agent_loader import NestedAgentLoader
 
+from agent_builder import directory
 from agent_builder.telemetry import hub
 from agent_builder.telemetry import router as telemetry_router
 from tectonic_runtime import bus as module_bus
@@ -26,11 +28,12 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 HOST = os.getenv("AGENT_BUILDER_HOST", "127.0.0.1")
 PORT = int(os.getenv("AGENT_BUILDER_PORT", "8000"))
 
+agent_loader = NestedAgentLoader(str(PROJECT_ROOT))
 app = get_fast_api_app(
     agents_dir=str(PROJECT_ROOT),
     # Generated agents are addressed by dotted path (generated_agents.<project>.<project>). With
     # web=False ADK defaults to the flat AgentLoader, which rejects dots; the nested loader accepts them.
-    agent_loader=NestedAgentLoader(str(PROJECT_ROOT)),
+    agent_loader=agent_loader,
     web=False,
     host=HOST,
     port=PORT,
@@ -86,6 +89,42 @@ async def simulate_office() -> dict:
     _background.add(task)
     task.add_done_callback(_background.discard)
     return {"status": "started"}
+
+
+# --- Agent directory: every agent reachable from the Builder chat, and deletable -------------------
+def _evict_app(app_name: str) -> None:
+    """Drop a generated app's cached agent and runner so its next run loads the code on disk."""
+    agent_loader.remove_agent_from_cache(app_name)
+    # get_fast_api_app does not expose its ApiServer; the runner cache lives on that single instance.
+    from google.adk.cli.api_server import ApiServer
+
+    for server in (o for o in gc.get_objects() if isinstance(o, ApiServer)):
+        server.runners_to_clean.add(app_name)
+
+
+directory.on_evict(_evict_app)
+
+
+@app.get("/directory/agents")
+async def directory_agents() -> dict:
+    return {"agents": directory.list_entries()}
+
+
+@app.post("/directory/chat")
+async def directory_chat(body: dict = Body(...)) -> dict:
+    try:
+        return await directory.run_agent(str(body.get("target", "")), str(body.get("message", "")),
+                                         session_key=str(body.get("session_key") or "studio"))
+    except directory.DirectoryError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.delete("/directory/agents/{target:path}")
+async def directory_delete(target: str) -> dict:
+    try:
+        return await directory.delete_agent(target)
+    except directory.DirectoryError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 if __name__ == "__main__":

@@ -13,6 +13,8 @@ import {
 import { useAgentStudioStore } from '../../store/useAgentStudioStore';
 import { DecisionCardGroup } from './DecisionCardGroup';
 import { JourneyStepper } from './JourneyStepper';
+import { AgentTargetPicker, MentionSuggestions } from './AgentTargetPicker';
+import { CallTrace } from './CallTrace';
 import { SpecCard } from './SpecCard';
 import { MarkdownContent } from './MarkdownContent';
 import { StreamingAgentDisplay } from './StreamingAgentDisplay';
@@ -31,11 +33,22 @@ export const ArchitectChat: React.FC = () => {
     isGeneratingAgent,
     pendingFiles,
     setCurrentAgentPhase,
-    builderJourney
+    builderJourney,
+    agentDirectory,
+    refreshDirectory,
+    chatTarget
   } = useAgentStudioStore();
 
   const [inputVal, setInputVal] = useState('');
   const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  // Every agent in the Studio is reachable from this chat: load the directory once.
+  useEffect(() => {
+    refreshDirectory();
+  }, [refreshDirectory]);
+
+  const mentionQuery = inputVal.match(/^@([\w./-]*)$/)?.[1];
+  const target = agentDirectory.find((a) => a.id === chatTarget);
 
   useEffect(() => {
     if (chatScrollRef.current) {
@@ -168,13 +181,23 @@ export const ArchitectChat: React.FC = () => {
       >
         {chatMessages.map((msg) => {
           const isUser = msg.sender === 'user';
+          if (msg.sender === 'system') {
+            return (
+              <div key={msg.id} className="flex justify-center">
+                <div className="max-w-[85%] text-[11px] text-slate-300 bg-white/[0.04] border border-white/10 rounded-full px-3 py-1">
+                  <MarkdownContent content={msg.content} />
+                </div>
+              </div>
+            );
+          }
+          const direct = !isUser && !!msg.agentName;
           return (
             <div
               key={msg.id}
               className={`flex gap-3 ${isUser ? 'justify-end' : 'justify-start'}`}
             >
               {!isUser && (
-                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center shadow-md shadow-sky-500/20 shrink-0">
+                <div className={`w-8 h-8 rounded-xl bg-gradient-to-tr ${direct ? 'from-emerald-500 to-teal-600 shadow-emerald-500/20' : 'from-sky-500 to-indigo-600 shadow-sky-500/20'} flex items-center justify-center shadow-md shrink-0`}>
                   <Bot className="w-4 h-4 text-white" />
                 </div>
               )}
@@ -182,8 +205,13 @@ export const ArchitectChat: React.FC = () => {
               <div className={`max-w-[85%] ${isUser ? 'items-end' : 'items-start'}`}>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-xs font-semibold text-slate-300">
-                    {isUser ? 'You (Architect)' : 'Meta-Agent Builder'}
+                    {isUser ? 'You (Architect)' : direct ? msg.agentName : 'Meta-Agent Builder'}
                   </span>
+                  {msg.agentTarget && (
+                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">
+                      {isUser ? '→ ' : ''}@{msg.agentTarget}
+                    </span>
+                  )}
                   <span className="text-[10px] text-slate-500">{msg.timestamp}</span>
                 </div>
 
@@ -198,6 +226,8 @@ export const ArchitectChat: React.FC = () => {
                   <MarkdownContent content={msg.content} isUser={isUser} />
 
                   {msg.architectureSpec && <SpecCard spec={msg.architectureSpec} />}
+
+                  {!isUser && msg.trace && msg.trace.length > 0 && <CallTrace steps={msg.trace} />}
 
                   {/* If this message contains interactive decisions, render the form */}
                   {msg.decisionGroup && (
@@ -258,13 +288,19 @@ export const ArchitectChat: React.FC = () => {
 
       {/* Input Chat Box */}
       <form onSubmit={handleSubmit} className="p-3 border-t border-studio-border bg-studio-card/80">
+        <div className="mb-2">
+          <AgentTargetPicker />
+        </div>
         <div className="relative flex items-center">
+          {mentionQuery !== undefined && (
+            <MentionSuggestions query={mentionQuery} onPick={(id) => setInputVal(`@${id} `)} />
+          )}
           <input
             type="text"
             value={inputVal}
             onChange={(e) => setInputVal(e.target.value)}
             disabled={isChatLoading}
-            placeholder="Describe what agent you want to create (e.g. attendance tracker, meeting scheduler)..."
+            placeholder={target ? `Message @${target.id}…` : 'Describe an agent to build, ask an existing agent (or type @ to pick one)…'}
             className="w-full text-xs bg-studio-surface/90 border border-white/10 rounded-xl pl-3.5 pr-10 py-2.5 text-slate-100 placeholder-slate-500 focus:outline-none focus:border-sky-500/50 transition-colors"
           />
           <button

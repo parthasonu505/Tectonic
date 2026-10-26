@@ -421,6 +421,12 @@ export default defineConfig({
     proxy: {
       // Command Center telemetry stream from server.py
       '/ws/telemetry': { target: `ws://${BACKEND}`, ws: true, changeOrigin: true },
+      // Agent directory: chat with / delete any agent from the Builder chat (server.py)
+      '/directory': {
+        target: `http://${BACKEND}`,
+        changeOrigin: true,
+        configure: (proxy) => proxy.on('proxyReq', (proxyReq) => proxyReq.setHeader('origin', `http://${BACKEND}`)),
+      },
       // Shared core-module registry and live office simulation (server.py)
       '/modules': {
         target: `http://${BACKEND}`,

@@ -5,6 +5,7 @@ the same API server) and broadcasts standardized JSON events over the ``/ws/tele
 
 Event contract (every event also carries ``type``, ``seq`` and ``timestamp`` in epoch seconds):
     AGENT_CREATED       { id, role, parent_id, system_prompt, description }
+    AGENT_DELETED       { ids, project }  (agents removed from the Studio; their code is gone)
     AGENT_STATE_CHANGE  { id, state: "idle" | "thinking" | "tool_execution" | "error", detail? }
     TOOL_CALL_START     { id, call_id, tool_name, payload }
     TOOL_CALL_END       { id, call_id, tool_name, payload, result, duration_ms, status }
@@ -145,6 +146,12 @@ class TelemetryHub:
     def knows(self, agent_id: str) -> bool:
         return ("AGENT_CREATED", agent_id) in self._sticky
 
+    def forget(self, agent_ids: list[str], **payload: Any) -> None:
+        """Agents were deleted: drop them from the late-joiner replay and tell live clients."""
+        for agent_id in agent_ids:
+            self._sticky.pop(("AGENT_CREATED", agent_id), None)
+        self.emit("AGENT_DELETED", ids=list(agent_ids), **payload)
+
     def subscribe(self) -> asyncio.Queue:
         self._loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue(maxsize=5_000)
@@ -229,6 +236,8 @@ class TelemetryPlugin(BasePlugin):
     async def _record_prompt_outcome(self, invocation_context: Any, passed: bool) -> None:
         """Coarse automatic signal for PromptOps A/B tests: did the Builder's run finish cleanly?"""
         if getattr(invocation_context, "app_name", None) != "agent_builder":
+            return
+        if getattr(invocation_context.agent, "name", None) != "agent_builder":  # a sub-agent run directly from the chat
             return
         rt = _runtime()
         session = getattr(invocation_context, "session", None)
