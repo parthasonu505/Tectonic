@@ -13,6 +13,7 @@ import type {
   CreatedAgent,
   EnvConfig,
   AgentEnvConfig,
+  StudioSettings,
   FileWriteEvent,
   AgentEvent
 } from '../types/agent';
@@ -45,6 +46,12 @@ interface AgentStudioState {
   setShowEnvModal: (val: boolean) => void;
   checkEnvConfig: () => Promise<void>;
   saveEnvConfig: (apiKey: string, model?: string) => Promise<{ success: boolean; message: string }>;
+
+  // The model the Agent Builder runs on (Gemini or Claude) and its provider keys
+  studioSettings: StudioSettings | null;
+  loadStudioSettings: () => Promise<void>;
+  /** Validated and applied by the backend at once (no restart); throws with the reason if refused. */
+  saveStudioSettings: (model: string, keys: { anthropicApiKey?: string; googleApiKey?: string }) => Promise<StudioSettings>;
 
   // Specific Agent .env in Sandbox
   selectedAgentEnv: AgentEnvConfig | null;
@@ -467,6 +474,18 @@ export const useAgentStudioStore = create<AgentStudioState>()(persist((set, get)
     return res;
   },
 
+  studioSettings: null,
+  loadStudioSettings: async () => {
+    const settings = await api.getStudioSettings();
+    if (settings) set({ studioSettings: settings });
+  },
+  saveStudioSettings: async (model, keys) => {
+    const settings = await api.saveStudioSettings(model, keys);
+    set({ studioSettings: settings });
+    await get().checkEnvConfig(); // the sandbox reads the Google key from the same .env
+    return settings;
+  },
+
   // Agent Specific Environment in Sandbox
   selectedAgentEnv: null,
   showAgentEnvModal: false,
@@ -639,6 +658,7 @@ export const useAgentStudioStore = create<AgentStudioState>()(persist((set, get)
         })(),
         get().restoreBuilderSession(),
         get().refreshDirectory(),
+        get().loadStudioSettings(),
       ]);
       void get().recoverPendingTurns();
     })().finally(() => {
@@ -661,6 +681,7 @@ export const useAgentStudioStore = create<AgentStudioState>()(persist((set, get)
         })(),
         get().restoreBuilderSession(),
         get().refreshDirectory(),
+        get().loadStudioSettings(),
       ]);
       void get().recoverPendingTurns();
     } finally {

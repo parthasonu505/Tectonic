@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import GridLayout, { type Layout } from 'react-grid-layout';
 import { AnimatePresence, motion } from 'framer-motion';
 import { LayoutDashboard } from 'lucide-react';
@@ -32,6 +32,7 @@ export function Workspace({ onSelectAgent }: { onSelectAgent: (id: string) => vo
   const minimized = useWorkspaceStore((s) => s.minimized);
   const closed = useWorkspaceStore((s) => s.closed);
   const maximized = useWorkspaceStore((s) => s.maximized);
+  const viewNonce = useWorkspaceStore((s) => s.viewNonce);
   const { commitLayout, exitMaximize, applyPreset } = useWorkspaceStore.getState();
   const [interacting, setInteracting] = useState(false);
 
@@ -96,7 +97,8 @@ export function Workspace({ onSelectAgent }: { onSelectAgent: (id: string) => vo
             return (
               <div key={id} className={maximized === id ? 'window-maximized' : ''}>
                 <WindowFrame id={id} title={def.title} icon={def.icon} accent={def.accent} status={Status ? <Status /> : undefined}>
-                  {def.render({ onSelectAgent })}
+                  {/* Keyed by viewNonce: "refresh all views" remounts the content so it reloads its data. */}
+                  <Fragment key={viewNonce}>{def.render({ onSelectAgent })}</Fragment>
                 </WindowFrame>
               </div>
             );

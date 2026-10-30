@@ -304,3 +304,23 @@ export interface AgentEvent {
   status: 'started' | 'thinking' | 'executing' | 'complete';
   timestamp: number;
 }
+
+/** A model the Builder can run on (GET /studio/settings). */
+export interface BuilderModelOption {
+  id: string;
+  provider: 'anthropic' | 'google';
+  label: string;
+  tag: string;
+  description: string;
+}
+
+/** The Builder's model and which provider keys are configured (keys are only ever shown masked). */
+export interface StudioSettings {
+  model: string;
+  provider: 'anthropic' | 'google';
+  catalogue: BuilderModelOption[];
+  has_anthropic_key: boolean;
+  anthropic_key_hint: string;
+  has_google_key: boolean;
+  google_key_hint: string;
+}

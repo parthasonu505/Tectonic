@@ -60,6 +60,8 @@ interface TelemetryState extends TelemetryData {
 
   connect: () => void;
   disconnect: () => void;
+  /** Drop everything shown and rebuild it from the server's replay (a fresh socket). */
+  resync: () => void;
   ingest: (events: TelemetryEvent[]) => void;
   selectAgent: (id: string | null, origin?: SelectionOrigin) => void;
   selectModule: (id: string | null, origin?: SelectionOrigin) => void;
@@ -488,6 +490,25 @@ export const useTelemetryStore = create<TelemetryState>((set, get) => {
       tickTimer = null;
       socket?.close();
       socket = null;
+    },
+
+    resync: () => {
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
+      const old = socket;
+      socket = null;
+      if (old) {
+        // Detach first: its close handler would otherwise schedule a second reconnect.
+        old.onopen = old.onmessage = old.onclose = old.onerror = null;
+        old.close();
+      }
+      pending = [];
+      // serverId null: the HELLO of the new socket is treated as a fresh server and its replay applied in full.
+      set({ ...emptyData(), serverId: null, lastSeq: 0, selectedAgentId: null, selectedModuleId: null, status: 'closed' });
+      wanted = true;
+      retry = 0;
+      startTicker();
+      open();
     },
 
     ingest: (events) => {

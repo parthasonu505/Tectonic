@@ -19,6 +19,7 @@ import { SpecCard } from './SpecCard';
 import { MarkdownContent } from './MarkdownContent';
 import { StreamingAgentDisplay } from './StreamingAgentDisplay';
 import { StreamingCodePanel } from '../StreamingCodePanel';
+import { refreshAllViews } from '../../workspace/refreshAllViews';
 
 export const ArchitectChat: React.FC = () => {
   const { 
@@ -37,7 +38,6 @@ export const ArchitectChat: React.FC = () => {
     agentDirectory,
     refreshDirectory,
     chatTarget,
-    refreshStudio,
     isRefreshing
   } = useAgentStudioStore();
 
@@ -100,10 +100,10 @@ export const ArchitectChat: React.FC = () => {
             </button>
 
             <button
-              onClick={() => refreshStudio()}
+              onClick={() => refreshAllViews()}
               disabled={isRefreshing}
               className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-colors disabled:opacity-60"
-              title="Refresh view & history (keeps this conversation)"
+              title="Refresh all views (keeps this conversation)"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
             </button>

@@ -46,6 +46,14 @@ DEFAULT_RATES: dict[str, dict[str, Any]] = {
     "gemini-2.5-flash": {"input": 0.30, "output": 2.50, "estimate": True, "note": "list price"},
     "gemini-2.5-flash-lite": {"input": 0.10, "output": 0.40, "estimate": True, "note": "list price"},
     "gemini-embedding-001": {"input": 0.15, "output": 0.0, "estimate": True, "note": "list price"},
+    # Anthropic list prices (first-party API) for the Claude models the Builder can run on.
+    "claude-fable-5-1": {"input": 10.00, "output": 50.00, "estimate": True, "note": "Anthropic list price"},
+    "claude-opus-5-5": {"input": 4.00, "output": 20.00, "estimate": True, "note": "Anthropic list price"},
+    "claude-opus-5": {"input": 5.00, "output": 25.00, "estimate": True, "note": "Anthropic list price"},
+    "claude-sonnet-5-5": {"input": 2.00, "output": 10.00, "estimate": True, "note": "Anthropic list price"},
+    "claude-sonnet-5": {"input": 2.00, "output": 10.00, "estimate": True, "note": "Anthropic list price"},
+    "claude-haiku-5-5": {"input": 0.10, "output": 0.50, "estimate": True, "note": "Anthropic list price (prompts ≤100K tokens)"},
+    "claude-haiku-4-5": {"input": 1.00, "output": 5.00, "estimate": True, "note": "Anthropic list price"},
 }
 FALLBACK_RATE = {"input": 0.30, "output": 2.50, "estimate": True,
                  "note": "no rate on file — using gemini-2.5-flash list price as an estimate"}

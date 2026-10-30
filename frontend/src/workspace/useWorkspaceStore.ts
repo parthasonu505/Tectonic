@@ -106,6 +106,9 @@ interface WorkspaceState {
   maximized: WindowId | null;
   focused: WindowId | null;
   attention: { id: WindowId; nonce: number } | null;
+  /** Bumped by "refresh all views": every window remounts and reloads its data (not persisted). */
+  viewNonce: number;
+  remountWindows: () => void;
 
   applyPreset: (preset: PresetId) => void;
   resetLayout: () => void;
@@ -133,6 +136,8 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       ...presetState('build'),
       focused: null,
       attention: null,
+      viewNonce: 0,
+      remountWindows: () => set((s) => ({ viewNonce: s.viewNonce + 1 })),
 
       applyPreset: (preset) => set({ ...presetState(preset), focused: null }),
       resetLayout: () => set({ ...presetState(get().preset), focused: null }),

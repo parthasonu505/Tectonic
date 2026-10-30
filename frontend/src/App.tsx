@@ -4,12 +4,8 @@ import {
   Settings,
   CheckCircle2,
   ChevronDown,
-  X,
-  Key,
   Plus,
   Layers,
-  Save,
-  Check,
   Sun,
   Moon,
   RotateCcw,
@@ -21,6 +17,8 @@ import { useTelemetryStore } from './store/useTelemetryStore';
 import { Workspace } from './workspace/Workspace';
 import { Dock } from './workspace/Dock';
 import { PRESETS, useWorkspaceStore, type PresetId, type WindowId } from './workspace/useWorkspaceStore';
+import { refreshAllViews } from './workspace/refreshAllViews';
+import { ModelSettingsModal } from './components/settings/ModelSettingsModal';
 
 // Store code still asks for a "tab" (e.g. after a build: 'sandbox'); in the workspace that means "reveal this window".
 const TAB_TO_WINDOW: Record<StudioTab, WindowId> = { command: 'command', visualizer: 'blueprint', sandbox: 'sandbox', inspector: 'inspector' };
@@ -69,17 +67,15 @@ export const App: React.FC = () => {
     activeTab,
     tabNonce,
     checkEnvConfig,
-    envConfig,
     showEnvModal,
     setShowEnvModal,
-    saveEnvConfig,
+    studioSettings,
     createdAgents,
     selectedAgent,
     setSelectedAgent,
     refreshCreatedAgents,
     startNewBuilderSession,
     restoreStudio,
-    refreshStudio,
     isRefreshing,
   } = useAgentStudioStore();
   const connectTelemetry = useTelemetryStore((s) => s.connect);
@@ -96,11 +92,10 @@ export const App: React.FC = () => {
     if (tabNonce) reveal(TAB_TO_WINDOW[activeTab]);
   }, [tabNonce]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [modelInput, setModelInput] = useState('gemini-3.6-flash');
-  const [saveSuccessMsg, setSaveSuccessMsg] = useState(false);
-  const [isSavingEnv, setIsSavingEnv] = useState(false);
   const [agentDropdownOpen, setAgentDropdownOpen] = useState(false);
+  const builderModelLabel = studioSettings
+    ? (studioSettings.catalogue.find((m) => m.id === studioSettings.model)?.label ?? studioSettings.model)
+    : '…';
   const [isDarkMode, setIsDarkMode] = useState(() => {
     // Check localStorage or default to dark
     try {
@@ -132,32 +127,6 @@ export const App: React.FC = () => {
     restoreStudio();
     connectTelemetry();
   }, []);
-
-  // Sync modal inputs when envConfig is loaded
-  useEffect(() => {
-    if (envConfig) {
-      setApiKeyInput(envConfig.apiKey || '');
-      setModelInput(envConfig.model || 'gemini-3.6-flash');
-    }
-  }, [envConfig]);
-
-  const handleSaveEnv = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIsSavingEnv(true);
-    try {
-      await saveEnvConfig(apiKeyInput, modelInput);
-      setSaveSuccessMsg(true);
-      setTimeout(() => {
-        setSaveSuccessMsg(false);
-        setShowEnvModal(false);
-      }, 1500);
-    } catch (err) {
-      console.error(err);
-      alert('Error saving .env: ' + err);
-    } finally {
-      setIsSavingEnv(false);
-    }
-  };
 
   const handleStartNewAgent = () => {
     startNewBuilderSession();
@@ -251,17 +220,21 @@ export const App: React.FC = () => {
 
         {/* Right: Agent Builder Status & Config */}
         <div className="flex items-center gap-3">
-          <div className="hidden items-center gap-1.5 rounded-full bg-white/[0.06] px-3 py-1 text-[12px] font-medium text-[var(--studio-text-secondary)] lg:flex">
+          <button
+            onClick={() => setShowEnvModal(true)}
+            className="hidden items-center gap-1.5 rounded-full bg-white/[0.06] px-3 py-1 text-[12px] font-medium text-[var(--studio-text-secondary)] transition-colors hover:bg-white/[0.1] hover:text-[var(--studio-text)] lg:flex"
+            title="The model the Builder runs on (click to change it or add an API key)"
+          >
             <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-            <span>Builder active</span>
-          </div>
+            <span>Builder · {builderModelLabel}</span>
+          </button>
 
           {/* Re-sync agents, files, sessions and history with the backend (the conversation is kept) */}
           <button
-            onClick={() => refreshStudio()}
+            onClick={() => refreshAllViews()}
             disabled={isRefreshing}
             className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--studio-text-secondary)] transition-colors hover:bg-white/[0.1] hover:text-[var(--studio-text)] disabled:opacity-60"
-            title="Refresh view & history (keeps your conversations)"
+            title="Refresh all views: sandbox, Command Center, Blueprint, code, platform windows and history (keeps your conversations)"
           >
             <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
           </button>
@@ -293,136 +266,8 @@ export const App: React.FC = () => {
       <Workspace onSelectAgent={focusAgent} />
       <Dock onSelectAgent={focusAgent} />
 
-      {/* Google Gemini API Key & Environment Config Modal (Zero LLM Interaction) */}
-      {showEnvModal && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-          <div className="w-full max-w-md rounded-2xl bg-studio-card border border-studio-border p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-              <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center shadow-md">
-                  <Key className="w-4 h-4 text-white" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-semibold text-slate-100">
-                    Google Gemini API Configuration
-                  </h3>
-                  <span className="text-[10px] text-sky-400 font-mono">
-                    Zero LLM Interaction • Direct .env Write
-                  </span>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowEnvModal(false)}
-                className="p-1 rounded text-slate-400 hover:text-white"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-300 leading-relaxed">
-              Agents are powered by Google Gemini (<code className="text-sky-300 font-mono">gemini-3.6-flash</code>). Enter your Google AI Studio API key below; it will be written directly to your local <code className="text-sky-300 font-mono">.env</code> file with pure file I/O.
-            </p>
-
-            <form onSubmit={handleSaveEnv} className="space-y-3.5 text-xs">
-              <div>
-                <label className="block text-slate-300 font-medium mb-1 flex items-center justify-between">
-                  <span>GOOGLE_API_KEY</span>
-                  <span className="text-[10px] text-slate-500 font-mono">
-                    {envConfig?.hasKey ? 'Configured in .env ✓' : 'Missing ⚠️'}
-                  </span>
-                </label>
-                <input
-                  type="password"
-                  value={apiKeyInput}
-                  onChange={(e) => setApiKeyInput(e.target.value)}
-                  placeholder="Paste your Google AI Studio API Key..."
-                  className="w-full text-xs font-mono px-3 py-2 rounded-lg bg-studio-surface border border-white/10 text-slate-200 focus:outline-none focus:border-sky-500"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="block text-slate-300 font-medium mb-1.5 flex items-center justify-between">
-                  <span>GEMINI_MODEL</span>
-                  <span className="text-[10px] text-emerald-400 font-mono">
-                    {modelInput}
-                  </span>
-                </label>
-                <div className="grid grid-cols-2 gap-1.5 mb-2">
-                  {[
-                    { id: 'gemini-3.6-flash', name: 'Gemini 3.6 Flash', tag: 'Fast' },
-                    { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', tag: 'Low Latency' },
-                    { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', tag: 'Reasoning' },
-                    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', tag: 'Efficient' }
-                  ].map((m) => {
-                    const isSelected = modelInput === m.id;
-                    return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        onClick={() => setModelInput(m.id)}
-                        className={`text-left p-2 rounded-lg border text-xs font-mono transition-all flex items-center justify-between ${
-                          isSelected
-                            ? 'bg-sky-500/20 border-sky-400 text-sky-200'
-                            : 'bg-studio-surface hover:bg-white/5 border-white/5 text-slate-300'
-                        }`}
-                      >
-                        <span className="truncate">{m.name}</span>
-                        <span className="text-[9px] uppercase px-1 rounded bg-white/10 text-slate-400 shrink-0">
-                          {m.tag}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-                <input
-                  type="text"
-                  value={modelInput}
-                  onChange={(e) => setModelInput(e.target.value)}
-                  placeholder="gemini-3.6-flash"
-                  className="w-full text-xs font-mono px-3 py-2 rounded-lg bg-studio-surface border border-white/10 text-slate-200 focus:outline-none focus:border-sky-500"
-                />
-              </div>
-
-              <div className="p-3 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-300 text-[11px] leading-relaxed">
-                <strong>Configured Target:</strong> Writes directly to <code className="font-mono text-[10px] text-slate-200">project_root/.env</code>.
-                No prompts or tokens are sent to any LLM for this operation.
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-white/10">
-                <button
-                  type="button"
-                  onClick={() => setShowEnvModal(false)}
-                  className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 text-xs transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSavingEnv}
-                  className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-xs font-semibold shadow-md transition-all ${
-                    saveSuccessMsg
-                      ? 'bg-emerald-500 text-white'
-                      : 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-white shadow-amber-500/20'
-                  }`}
-                >
-                  {saveSuccessMsg ? (
-                    <>
-                      <Check className="w-3.5 h-3.5" />
-                      <span>Saved to .env!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Save className="w-3.5 h-3.5" />
-                      <span>{isSavingEnv ? 'Saving...' : 'Save to .env'}</span>
-                    </>
-                  )}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      {/* Builder model (Claude or Gemini) and provider API keys */}
+      {showEnvModal && <ModelSettingsModal onClose={() => setShowEnvModal(false)} />}
     </div>
   );
 };

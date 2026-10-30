@@ -11,7 +11,8 @@ import type {
   EnvConfig,
   AgentEditResult,
   AgentUndoResult,
-  AgentEditHistory
+  AgentEditHistory,
+  StudioSettings
 } from '../types/agent';
 
 /** The ADK session a request was sent to no longer exists (server data reset, stale id): open a new one. */
@@ -184,6 +185,28 @@ class ApiService {
 
   public getMockMode(): boolean {
     return this.isMockMode;
+  }
+
+  // --- Builder model & provider keys (applied live by the backend, saved to .env) ---
+  public async getStudioSettings(): Promise<StudioSettings | null> {
+    try {
+      const res = await fetch('/studio/settings');
+      return res.ok ? ((await res.json()) as StudioSettings) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Validates the model and keys (a Claude key is checked with Anthropic), saves them and switches the Builder. */
+  public async saveStudioSettings(model: string, keys: { anthropicApiKey?: string; googleApiKey?: string }): Promise<StudioSettings> {
+    const res = await fetch('/studio/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, anthropic_api_key: keys.anthropicApiKey || null, google_api_key: keys.googleApiKey || null }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `Saving settings failed (${res.status})`);
+    return data as StudioSettings;
   }
 
   // --- Environment & API Key Management (Zero LLM Interaction) ---

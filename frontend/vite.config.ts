@@ -442,6 +442,12 @@ export default defineConfig({
         changeOrigin: true,
         configure: (proxy) => proxy.on('proxyReq', (proxyReq) => proxyReq.setHeader('origin', `http://${BACKEND}`)),
       },
+      // Builder model choice and provider keys (server.py, applied live)
+      '/studio': {
+        target: `http://${BACKEND}`,
+        changeOrigin: true,
+        configure: (proxy) => proxy.on('proxyReq', (proxyReq) => proxyReq.setHeader('origin', `http://${BACKEND}`)),
+      },
       // Shared core-module registry and live office simulation (server.py)
       '/modules': {
         target: `http://${BACKEND}`,

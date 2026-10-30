@@ -17,7 +17,7 @@ from fastapi import Body, HTTPException
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.cli.utils._nested_agent_loader import NestedAgentLoader
 
-from agent_builder import directory, editor
+from agent_builder import directory, editor, model_settings
 from agent_builder.telemetry import hub
 from agent_builder.telemetry import router as telemetry_router
 from tectonic_runtime import bus as module_bus
@@ -117,6 +117,21 @@ async def directory_chat(body: dict = Body(...)) -> dict:
                                          session_key=str(body.get("session_key") or "studio"))
     except directory.DirectoryError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+@app.get("/studio/settings")
+async def studio_settings() -> dict:
+    """The Builder's model, the models offered, and which provider keys are configured (masked)."""
+    return model_settings.status()
+
+
+@app.post("/studio/settings")
+async def studio_settings_update(body: dict = Body(...)) -> dict:
+    """{model, anthropic_api_key?, google_api_key?}: validate, save to .env and switch the Builder live."""
+    try:
+        return await model_settings.apply(str(body.get("model", "")), body.get("anthropic_api_key"), body.get("google_api_key"))
+    except model_settings.SettingsError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
 
 @app.post("/directory/edit")

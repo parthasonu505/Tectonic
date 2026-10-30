@@ -1,9 +1,12 @@
 """Single source of truth for the model, filesystem paths and environment lookups."""
 
+import logging
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+from .studio_model import StudioModel, build_claude, is_claude
 
 # Suppress ADK advisory notice for LiteLLM
 os.environ["ADK_SUPPRESS_GEMINI_LITELLM_WARNINGS"] = "true"
@@ -65,11 +68,18 @@ def _is_aq_key(api_key: str) -> bool:
 
 
 def build_model(model_name: str = None):
-    """Create model wrapper used by every agent.
-    
-    Uses native Google Gemini model for AQ.* keys (Authentication Keys from Google AI Studio)
-    which work better with the native SDK. Falls back to LiteLLM for other key formats.
+    """Create the model wrapper for a model name: Claude ("claude-...") or Gemini.
+
+    Claude uses ADK's Anthropic adapter with ANTHROPIC_API_KEY. Gemini uses the native Google Gemini
+    model for AQ.* keys (Authentication Keys from Google AI Studio), which work better with the native
+    SDK, and LiteLLM for other key formats.
     """
+    if model_name and is_claude(model_name):
+        anthropic_key = os.getenv("ANTHROPIC_API_KEY", "")
+        if not anthropic_key:
+            raise ValueError(f"{model_name} needs an Anthropic API key (ANTHROPIC_API_KEY).")
+        return build_claude(model_name, anthropic_key)
+
     api_key = os.getenv("GOOGLE_API_KEY", "") or os.getenv("GEMINI_API_KEY", "")
     target_model = resolve_model_name(model_name or MODEL_NAME)
     
@@ -95,7 +105,21 @@ def build_model(model_name: str = None):
     return LiteLlm(**kwargs)
 
 
-MODEL = build_model()
+def _initial_builder_model() -> StudioModel:
+    """The Builder's model from BUILDER_MODEL (set in the Studio), else GEMINI_MODEL."""
+    name = (os.getenv("BUILDER_MODEL") or RAW_MODEL_NAME).strip()
+    try:
+        delegate = build_model(name)
+    except ValueError as exc:  # e.g. Claude chosen but its key was removed: keep the Builder usable
+        logging.getLogger(__name__).warning("Builder model %s unavailable (%s); using %s", name, exc, RAW_MODEL_NAME)
+        name, delegate = RAW_MODEL_NAME, build_model()
+    model = StudioModel(model=name)
+    model.use(delegate, name)
+    return model
+
+
+# Shared by every Builder agent; switching it in the Studio applies to the next call (see studio_model.py).
+MODEL = _initial_builder_model()
 
 
 # --- Paths ---------------------------------------------------------------
