@@ -8,8 +8,37 @@ import type {
   DirectoryAgent,
   TraceStep,
   CreatedAgent,
-  EnvConfig 
+  EnvConfig,
+  AgentEditResult,
+  AgentUndoResult,
+  AgentEditHistory
 } from '../types/agent';
+
+/** The ADK session a request was sent to no longer exists (server data reset, stale id): open a new one. */
+export class SessionMissingError extends Error {
+  constructor(message = 'Session not found') {
+    super(message);
+    this.name = 'SessionMissingError';
+  }
+}
+
+/** An ADK session as GET /apps/<app>/users/<user>/sessions/<id> returns it. */
+export interface AdkSession {
+  id: string;
+  state?: Record<string, any>;
+  events?: any[];
+  lastUpdateTime?: number;
+}
+
+export type SessionLookup = { status: 'ok'; session: AdkSession } | { status: 'missing' } | { status: 'offline' };
+
+/** A turn sent before a page refresh, found again in the server session. */
+export interface TurnLookup {
+  status: 'done' | 'running' | 'absent';
+  events: any[];
+  /** Seconds since the turn's latest event was recorded. */
+  idleSeconds?: number;
+}
 
 export interface ChatResponse {
   reply: string;
@@ -22,6 +51,8 @@ export interface ChatResponse {
   /** Set when the Builder handed the message to an existing agent (ask_agent). */
   routedTo?: string;
   routedAgent?: string;
+  /** Set when the Builder changed (or undid a change to) a generated agent with edit_agent. */
+  edited?: { project: string; target: string };
 }
 
 export interface AgentChatResult {
@@ -229,6 +260,7 @@ class ApiService {
 
     if (!res.ok) {
       const errText = await res.text();
+      if (res.status === 404 && errText.includes('Session not found')) throw new SessionMissingError();
       throw new Error(`ADK Backend error ${res.status}: ${errText}`);
     }
 
@@ -236,8 +268,8 @@ class ApiService {
     return this.parseBuilderEvents(events);
   }
 
-  // --- Parse ADK Events from Agent Builder ---
-  private parseBuilderEvents(events: any[]): ChatResponse {
+  // --- Parse ADK Events from Agent Builder (also turns recovered after a page refresh) ---
+  public parseBuilderEvents(events: any[]): ChatResponse {
     let replyText = '';
     let extractedRequirements: any = null;
     let pendingDecisions: any = undefined;
@@ -341,12 +373,13 @@ class ApiService {
 
   /** Who ran in this Builder turn: agent hand-offs, tool / specialist calls, and (via ask_agent) the
    *  agents the Builder reached on the user's behalf, with their own nested steps. */
-  private extractTrace(events: any[]): { trace: TraceStep[]; routedTo?: string; routedAgent?: string } {
+  private extractTrace(events: any[]): Pick<ChatResponse, 'routedTo' | 'routedAgent' | 'edited'> & { trace: TraceStep[] } {
     const trace: TraceStep[] = [];
     const byCallId = new Map<string, TraceStep>();
     let lastAuthor = '';
     let routedTo: string | undefined;
     let routedAgent: string | undefined;
+    let edited: ChatResponse['edited'];
     for (const event of events) {
       const author: string = event.author || '';
       if (author && author !== 'user' && author !== lastAuthor) {
@@ -370,10 +403,13 @@ class ApiService {
             routedAgent = resp.agent;
             for (const inner of resp.trace) trace.push({ ...inner, nested: true });
           }
+          if ((fr.name === 'edit_agent' || fr.name === 'undo_agent_edit') && resp.status === 'success' && resp.project) {
+            edited = { project: String(resp.project), target: String(resp.target ?? resp.project) };
+          }
         }
       }
     }
-    return { trace, routedTo, routedAgent };
+    return { trace, routedTo, routedAgent, edited };
   }
 
   // --- Agent directory: every agent reachable from the Builder chat ---
@@ -399,11 +435,92 @@ class ApiService {
     return data as AgentChatResult;
   }
 
+  // --- Sessions after a page refresh ---
+  /** Look up an ADK session: 'missing' when the server no longer has it, 'offline' when it cannot be reached. */
+  public async getSession(appName: string, sessionId: string, userId: string = 'default_user'): Promise<SessionLookup> {
+    if (this.isMockMode) return { status: 'offline' };
+    try {
+      const res = await fetch(`/apps/${encodeURIComponent(appName)}/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}`);
+      if (res.status === 404) return { status: 'missing' };
+      if (!res.ok) return { status: 'offline' };
+      return { status: 'ok', session: await res.json() };
+    } catch {
+      return { status: 'offline' };
+    }
+  }
+
+  /** Find the turn that started with `text` (sent at `sentAt`, ms) in a session, and whether it has finished. */
+  public findTurn(session: AdkSession, text: string, sentAt: number): TurnLookup {
+    const events = session.events ?? [];
+    const textOf = (e: any) => (e?.content?.parts ?? []).map((p: any) => (typeof p.text === 'string' ? p.text : '')).join('').trim();
+    const since = sentAt / 1000 - 30; // same machine, but allow for clock skew and slow request starts
+    let start = -1;
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].author === 'user' && (events[i].timestamp ?? 0) >= since && textOf(events[i]) === text.trim()) {
+        start = i;
+        break;
+      }
+    }
+    if (start < 0) return { status: 'absent', events: [] };
+    const invocation = events[start].invocationId;
+    const turn = events.slice(start).filter((e: any) => !invocation || e.invocationId === invocation);
+    const last = turn[turn.length - 1];
+    const parts: any[] = last?.content?.parts ?? [];
+    const final = turn.length > 1 && last.author !== 'user'
+      && parts.some((p) => typeof p.text === 'string' && p.text.trim() && !p.thought)
+      && !parts.some((p) => p.functionCall || p.functionResponse);
+    const idleSeconds = typeof last?.timestamp === 'number' ? Date.now() / 1000 - last.timestamp : undefined;
+    return { status: final ? 'done' : 'running', events: turn, idleSeconds };
+  }
+
+  // --- Conversational agent editing ---
+  public async editAgent(target: string, request: string, sessionKey: string): Promise<AgentEditResult> {
+    const res = await fetch('/directory/edit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, request, session_key: sessionKey }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `Edit failed (${res.status})`);
+    return data as AgentEditResult;
+  }
+
+  public async undoAgentEdit(target: string): Promise<AgentUndoResult> {
+    const res = await fetch('/directory/edit/undo', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `Undo failed (${res.status})`);
+    return data as AgentUndoResult;
+  }
+
+  /** Edit history of a project; null when the backend cannot be reached. */
+  public async listAgentEdits(project: string): Promise<AgentEditHistory | null> {
+    try {
+      const res = await fetch(`/directory/edits/${encodeURIComponent(project)}`);
+      if (!res.ok) return null;
+      return (await res.json()) as AgentEditHistory;
+    } catch {
+      return null;
+    }
+  }
+
   public async deleteDirectoryAgent(id: string): Promise<AgentDeleteResult> {
     const res = await fetch(`/directory/agents/${id.split('/').map(encodeURIComponent).join('/')}`, { method: 'DELETE' });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || `Delete failed (${res.status})`);
     return data as AgentDeleteResult;
+  }
+
+  /** Interview progress and open decision cards from the Builder session's state (after a refresh). */
+  public journeyFromState(raw: any): BuilderJourney | undefined {
+    return raw ? this.toJourney(raw) : undefined;
+  }
+
+  public decisionGroupFromState(pending: any): DecisionGroup | undefined {
+    return this.structuredDecisionGroup(pending);
   }
 
   private toJourney(raw: any): BuilderJourney {
@@ -648,10 +765,15 @@ class ApiService {
 
     if (!res.ok) {
       const errText = await res.text();
+      if (res.status === 404 && errText.includes('Session not found')) throw new SessionMissingError();
       throw new Error(`Agent execution error ${res.status}: ${errText}`);
     }
 
-    const events: any[] = await res.json();
+    return this.parseRuntimeEvents(appName, await res.json());
+  }
+
+  /** Reply, tool activity and guardrail hits of one sandbox turn (also turns recovered after a refresh). */
+  public parseRuntimeEvents(appName: string, events: any[]): RuntimeChatResponse {
     let reply = '';
     const toolCalls: any[] = [];
     let guardrailTriggered: any = null;

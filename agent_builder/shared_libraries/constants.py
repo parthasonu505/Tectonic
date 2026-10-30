@@ -112,6 +112,7 @@ OUTPUT_DIR = _resolve_dir("AGENT_BUILDER_OUTPUT_DIR", PROJECT_ROOT / "generated_
 LOG_DIR = _resolve_dir("AGENT_BUILDER_LOG_DIR", PROJECT_ROOT / "logs")
 REGISTRY_DIR_NAME = "_registry"
 SESSIONS_DIR_NAME = "_sessions"
+EDITS_DIR_NAME = "_edits"  # per-project history of conversational edits (what undo restores)
 
 # --- Session state keys --------------------------------------------------
 STATE_INTENT = "intent"

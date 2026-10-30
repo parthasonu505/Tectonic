@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from google.adk.tools import ToolContext
 
-from .. import directory
+from .. import directory, editor
 
 
 def list_agents() -> dict:
@@ -56,5 +56,48 @@ async def delete_agent(agent: str, confirm: bool = False) -> dict:
         return {"status": "confirmation_required", "message": f"Ask the user to confirm deleting '{what}' (its code is removed permanently)."}
     try:
         return await directory.delete_agent(agent)
+    except directory.DirectoryError as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+def _compact_edit(result: dict) -> dict:
+    """An edit result for the Builder's context: no diffs or traces (the Studio shows those)."""
+    out = {k: v for k, v in result.items() if k not in ("trace", "files")}
+    out["files"] = [{k: f[k] for k in ("path", "status", "added", "removed")} for f in result.get("files", [])]
+    return out
+
+
+async def edit_agent(agent: str, change_request: str, tool_context: ToolContext) -> dict:
+    """Change an EXISTING generated agent in place, from the user's words: its prompt/behaviour, tools,
+    sub-agents or dependencies. The change is verified (safety scan + import) and goes live at once;
+    a change that fails verification is rolled back. Follow-up requests continue the same edit
+    conversation. Use this instead of a new build whenever the user wants to modify an agent that exists.
+
+    Args:
+        agent: The agent id from list_agents ('<project>' or '<project>/<agent>'), or its name.
+        change_request: The change, in the user's words (complete and self-contained).
+        tool_context: Injected by ADK.
+
+    Returns:
+        dict with status (success / no_change / error), summary, changed files and prompts published.
+    """
+    try:
+        session = getattr(tool_context, "session", None)
+        return _compact_edit(await editor.edit_agent(agent, change_request, session_key=getattr(session, "id", "builder")))
+    except directory.DirectoryError as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+async def undo_agent_edit(agent: str) -> dict:
+    """Undo the most recent edit made to a generated project (restores the files it changed).
+
+    Args:
+        agent: The agent id ('<project>' or '<project>/<agent>'), or its name.
+
+    Returns:
+        dict with status, the undone request and the restored files.
+    """
+    try:
+        return _compact_edit(await editor.undo_last_edit(agent))
     except directory.DirectoryError as exc:
         return {"status": "error", "error": str(exc)}

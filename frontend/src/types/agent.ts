@@ -139,6 +139,8 @@ export interface ChatMessage {
   /** Agent name that answered (shown instead of "Meta-Agent Builder"). */
   agentName?: string;
   trace?: TraceStep[];
+  /** The reply was recovered from the server session after a page refresh. */
+  recovered?: boolean;
   structuredInfo?: {
     goal?: string;
     tools?: string[];
@@ -147,11 +149,94 @@ export interface ChatMessage {
   };
 }
 
+/** One file an agent edit changed (POST /directory/edit). Paths are relative to generated_agents/<project>/. */
+export interface AgentEditFile {
+  path: string;
+  status: 'added' | 'modified' | 'deleted';
+  added: number;
+  removed: number;
+  diff?: string;
+}
+
+export interface PromptPublish {
+  prompt?: string;
+  version?: string;
+  published?: boolean;
+  error?: string;
+}
+
+/** Result of a conversational edit of a generated agent. */
+export interface AgentEditResult {
+  status: 'success' | 'no_change' | 'error';
+  project: string;
+  target: string;
+  agent: string;
+  app_name: string;
+  edit_id?: string;
+  summary?: string;
+  reply?: string;
+  error?: string;
+  problems?: string[];
+  rolled_back?: boolean;
+  files?: AgentEditFile[];
+  prompts?: PromptPublish[];
+  trace?: TraceStep[];
+  duration_ms?: number;
+}
+
+export interface AgentUndoResult {
+  status: 'success';
+  project: string;
+  target: string;
+  app_name: string;
+  undone: string;
+  request: string;
+  files: AgentEditFile[];
+  prompts: PromptPublish[];
+}
+
+/** GET /directory/edits/<project>: recorded edits plus whether one is running right now. */
+export interface AgentEditHistory {
+  project: string;
+  edits: { id: string; target?: string; request: string; summary: string; created_at: string; files: string[] }[];
+  editing: boolean;
+  last_attempt: {
+    request: string;
+    status: AgentEditResult['status'];
+    edit_id?: string | null;
+    summary: string;
+    error?: string | null;
+    problems: string[];
+    finished_at: string;
+  } | null;
+}
+
+/** What an edit message in the sandbox shows. */
+export interface SandboxEditView {
+  outcome: 'success' | 'no_change' | 'error' | 'undone';
+  editId?: string;
+  summary: string;
+  files: AgentEditFile[];
+  problems?: string[];
+  prompts?: PromptPublish[];
+  /** Set on a success once it has been undone. */
+  undone?: boolean;
+  /** Recovered from the server after a page refresh. */
+  recovered?: boolean;
+}
+
 export interface SandboxChatMessage {
   id: string;
   sender: 'user' | 'agent' | 'system';
   content: string;
   timestamp: string;
+  /** 'edit-request': the user's change request; 'edit': its outcome; 'notice': session / re-run markers. */
+  kind?: 'edit-request' | 'edit' | 'notice';
+  edit?: SandboxEditView;
+  /** A test message re-sent automatically to the updated agent. */
+  rerun?: boolean;
+  /** The reply was recovered from the server session after a page refresh. */
+  recovered?: boolean;
   toolCalls?: {
     toolName: string;
     params: Record<string, any>;

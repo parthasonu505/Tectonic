@@ -30,7 +30,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
-from .shared_libraries.constants import OUTPUT_DIR, REGISTRY_DIR_NAME, SESSIONS_DIR_NAME
+from .shared_libraries.constants import EDITS_DIR_NAME, OUTPUT_DIR, REGISTRY_DIR_NAME, SESSIONS_DIR_NAME
 from .tracing import logger
 
 BUILDER = "agent_builder"
@@ -218,19 +218,14 @@ def _plugins() -> list:
         return []
 
 
-async def run_agent(target: str, message: str, session_key: str = "default") -> dict:
-    """Send a message to any agent in the directory; returns its reply and the call trace."""
-    entry = resolve(target)
-    if entry is None:
-        raise DirectoryError(f"No agent named {target!r}. Known: " + ", ".join(e["id"] for e in list_entries()))
-    if entry["kind"] == "builder":
-        raise DirectoryError("The Builder is the chat itself: send the message without an @target.")
-    agent = _load_agent(entry)
-    runner = Runner(app_name=entry["app_name"], agent=agent, session_service=_SESSIONS, plugins=_plugins(),
-                    auto_create_session=True)
-    session_id = re.sub(r"[^A-Za-z0-9_.:-]", "_", f"{session_key}:{entry['id']}")[:120]
-    trace: list[dict] = [{"type": "agent", "agent": entry["name"], "detail": f"{entry['kind'].replace('_', ' ')} · {entry['id']}"}]
-    reply, last_author, started = "", entry["name"], time.perf_counter()
+def session_id_for(session_key: str, entry_id: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.:-]", "_", f"{session_key}:{entry_id}")[:120]
+
+
+async def drive(runner: Runner, session_id: str, message: str, trace: list[dict]) -> str:
+    """Run one turn and return the final text reply; agent hand-offs and tool calls are appended to
+    `trace` (whose first step names the agent that starts). Closes the runner."""
+    reply, last_author = "", trace[0]["agent"] if trace else ""
     try:
         async for event in runner.run_async(user_id=_STUDIO_USER, session_id=session_id,
                                             new_message=types.Content(role="user", parts=[types.Part(text=message)])):
@@ -252,8 +247,24 @@ async def run_agent(target: str, message: str, session_key: str = "default") -> 
                 reply = text
     finally:
         await runner.close()
-    for step in trace:
-        step.pop("id", None)
+        for step in trace:
+            step.pop("id", None)
+    return reply
+
+
+async def run_agent(target: str, message: str, session_key: str = "default") -> dict:
+    """Send a message to any agent in the directory; returns its reply and the call trace."""
+    entry = resolve(target)
+    if entry is None:
+        raise DirectoryError(f"No agent named {target!r}. Known: " + ", ".join(e["id"] for e in list_entries()))
+    if entry["kind"] == "builder":
+        raise DirectoryError("The Builder is the chat itself: send the message without an @target.")
+    agent = _load_agent(entry)
+    runner = Runner(app_name=entry["app_name"], agent=agent, session_service=_SESSIONS, plugins=_plugins(),
+                    auto_create_session=True)
+    trace: list[dict] = [{"type": "agent", "agent": entry["name"], "detail": f"{entry['kind'].replace('_', ' ')} · {entry['id']}"}]
+    started = time.perf_counter()
+    reply = await drive(runner, session_id_for(session_key, entry["id"]), message, trace)
     return {"status": "success", "target": entry["id"], "agent": entry["name"], "kind": entry["kind"],
             "project": entry["project"], "reply": reply or "(no text reply)", "trace": trace,
             "duration_ms": round((time.perf_counter() - started) * 1000)}
@@ -265,11 +276,16 @@ def on_evict(hook: Callable[[str], None]) -> None:
     _evict_hooks.append(hook)
 
 
-def _evict(project: str) -> None:
+def purge_modules(project: str) -> None:
+    """Forget a project's imported modules so the next import reads the code on disk."""
     prefix = app_name(project).rsplit(".", 1)[0]  # generated_agents.<project>
     for name in [m for m in sys.modules if m == prefix or m.startswith(prefix + ".")]:
         del sys.modules[name]
     importlib.invalidate_caches()
+
+
+def _evict(project: str) -> None:
+    purge_modules(project)
     for hook in _evict_hooks:
         try:
             hook(app_name(project))
@@ -403,6 +419,7 @@ async def delete_agent(target: str) -> dict:
         _rmtree(OUTPUT_DIR / project)
         for extra in (OUTPUT_DIR / REGISTRY_DIR_NAME / f"{project}.json", OUTPUT_DIR / SESSIONS_DIR_NAME / f"{project}.json"):
             extra.unlink(missing_ok=True)
+        _rmtree(OUTPUT_DIR / EDITS_DIR_NAME / project)
         payload = {"kind": "project", "project": project, "agents": names}
         platform = await _platform_cleanup(project, payload)
         _forget(names, project)

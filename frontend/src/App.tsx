@@ -13,6 +13,7 @@ import {
   Sun,
   Moon,
   RotateCcw,
+  RefreshCw,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { useAgentStudioStore, type StudioTab } from './store/useAgentStudioStore';
@@ -77,6 +78,9 @@ export const App: React.FC = () => {
     setSelectedAgent,
     refreshCreatedAgents,
     startNewBuilderSession,
+    restoreStudio,
+    refreshStudio,
+    isRefreshing,
   } = useAgentStudioStore();
   const connectTelemetry = useTelemetryStore((s) => s.connect);
   const selectTelemetryAgent = useTelemetryStore((s) => s.selectAgent);
@@ -124,8 +128,8 @@ export const App: React.FC = () => {
   // Initialize on mount
   useEffect(() => {
     checkEnvConfig();
-    refreshCreatedAgents();
-    startNewBuilderSession();
+    // Reopen the conversations, sessions and agent from before the page refresh (or start fresh).
+    restoreStudio();
     connectTelemetry();
   }, []);
 
@@ -251,6 +255,16 @@ export const App: React.FC = () => {
             <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
             <span>Builder active</span>
           </div>
+
+          {/* Re-sync agents, files, sessions and history with the backend (the conversation is kept) */}
+          <button
+            onClick={() => refreshStudio()}
+            disabled={isRefreshing}
+            className="flex h-7 w-7 items-center justify-center rounded-full text-[var(--studio-text-secondary)] transition-colors hover:bg-white/[0.1] hover:text-[var(--studio-text)] disabled:opacity-60"
+            title="Refresh view & history (keeps your conversations)"
+          >
+            <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+          </button>
 
           {/* Theme Toggle Button */}
           <button

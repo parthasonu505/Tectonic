@@ -17,7 +17,7 @@ from fastapi import Body, HTTPException
 from google.adk.cli.fast_api import get_fast_api_app
 from google.adk.cli.utils._nested_agent_loader import NestedAgentLoader
 
-from agent_builder import directory
+from agent_builder import directory, editor
 from agent_builder.telemetry import hub
 from agent_builder.telemetry import router as telemetry_router
 from tectonic_runtime import bus as module_bus
@@ -115,6 +115,32 @@ async def directory_chat(body: dict = Body(...)) -> dict:
     try:
         return await directory.run_agent(str(body.get("target", "")), str(body.get("message", "")),
                                          session_key=str(body.get("session_key") or "studio"))
+    except directory.DirectoryError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@app.post("/directory/edit")
+async def directory_edit(body: dict = Body(...)) -> dict:
+    """Conversational edit of a generated agent: {target, request, session_key} → summary, diffs, status."""
+    try:
+        return await editor.edit_agent(str(body.get("target", "")), str(body.get("request", "")),
+                                       session_key=str(body.get("session_key") or "studio"))
+    except directory.DirectoryError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/directory/edit/undo")
+async def directory_edit_undo(body: dict = Body(...)) -> dict:
+    try:
+        return await editor.undo_last_edit(str(body.get("target", "")))
+    except directory.DirectoryError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/directory/edits/{target:path}")
+async def directory_edits(target: str) -> dict:
+    try:
+        return editor.list_edits(target)
     except directory.DirectoryError as exc:
         raise HTTPException(404, str(exc)) from exc
 

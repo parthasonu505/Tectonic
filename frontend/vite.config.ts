@@ -39,6 +39,10 @@ function backendBridgePlugin(): Plugin {
             referer: `http://${BACKEND}/`
           };
 
+          // A page refresh must not abort an agent run: ADK cancels /run when its client disconnects, so the
+          // upstream request is kept open after the browser leaves and its reply drained. The reloaded Studio
+          // then finds the finished turn in the session.
+          let upstream: http.IncomingMessage | null = null;
           const adkReq = http.request(
             {
               hostname: '127.0.0.1',
@@ -48,12 +52,23 @@ function backendBridgePlugin(): Plugin {
               headers: adkHeaders
             },
             (adkRes) => {
+              upstream = adkRes;
+              if (res.destroyed) {
+                adkRes.resume();
+                return;
+              }
               res.writeHead(adkRes.statusCode || 200, adkRes.headers);
               adkRes.pipe(res);
             }
           );
 
+          res.on('close', () => {
+            if (!res.writableFinished) upstream?.resume();
+          });
+          res.on('error', () => { /* the browser went away; the upstream run continues */ });
+
           adkReq.on('error', (err) => {
+            if (res.headersSent || res.destroyed) return;
             res.statusCode = 502;
             res.setHeader('Content-Type', 'application/json');
             res.end(JSON.stringify({ error: 'ADK Backend connection error: ' + err.message }));

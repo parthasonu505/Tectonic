@@ -188,6 +188,29 @@ class PromptOpsModule(BaseModule):
         self.repository.flush()
         return v
 
+    async def publish_code_default(self, prompt_name: str, template: str) -> tuple[PromptVersionRecord, bool]:
+        """Make an explicitly edited code default live, even over a version an admin promoted.
+
+        Used when the user changes an agent's prompt in the Studio: that edit is the intent, so it must
+        not be shadowed by an older managed version. Returns (version, published). Refuses (raises)
+        while an A/B test runs for the prompt.
+        """
+        await self.boot()
+        digest = hashlib.sha256(template.encode("utf-8")).hexdigest()
+        active = await self.repository.get_active_prompt_version(tenant_id=TENANT, prompt_name=prompt_name)
+        if active and hashlib.sha256(active.template.encode("utf-8")).hexdigest() == digest:
+            self.repository.code_defaults[prompt_name] = digest
+            self.repository.flush()
+            return active, False
+        if self._running_test(prompt_name):
+            raise RuntimeError(f"an A/B test is running for {prompt_name}; conclude it first")
+        v = await self.registry.register(tenant_id=TENANT, prompt_name=prompt_name, version=self._next_version(prompt_name),
+                                         template=template)
+        await self._activate(v)
+        self.repository.code_defaults[prompt_name] = digest
+        self.repository.flush()
+        return v, True
+
     async def resolve_template(self, prompt_name: str, session_id: str | None, default: str) -> tuple[str, str | None]:
         """Python API for instruction providers: (template, version_id). Never raises."""
         try:

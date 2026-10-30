@@ -36,7 +36,9 @@ export const ArchitectChat: React.FC = () => {
     builderJourney,
     agentDirectory,
     refreshDirectory,
-    chatTarget
+    chatTarget,
+    refreshStudio,
+    isRefreshing
   } = useAgentStudioStore();
 
   const [inputVal, setInputVal] = useState('');
@@ -98,11 +100,12 @@ export const ArchitectChat: React.FC = () => {
             </button>
 
             <button
-              onClick={() => startNewBuilderSession()}
-              className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-colors"
-              title="Reset builder session"
+              onClick={() => refreshStudio()}
+              disabled={isRefreshing}
+              className="p-1.5 rounded hover:bg-white/5 text-slate-400 hover:text-white transition-colors disabled:opacity-60"
+              title="Refresh view & history (keeps this conversation)"
             >
-              <RefreshCw className="w-3.5 h-3.5" />
+              <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
             </button>
             <button
               onClick={() => setHudCollapsed(!hudCollapsed)}
@@ -213,6 +216,11 @@ export const ArchitectChat: React.FC = () => {
                     </span>
                   )}
                   <span className="text-[10px] text-slate-500">{msg.timestamp}</span>
+                  {msg.recovered && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-300 border border-amber-500/20" title="This reply finished while the page was being refreshed and was recovered from the server">
+                      recovered after refresh
+                    </span>
+                  )}
                 </div>
 
                 {/* Message Body */}
